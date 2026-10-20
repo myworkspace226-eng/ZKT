@@ -25,7 +25,7 @@ import {
   DEFAULT_FACTORY_SETTINGS
 } from './data/mockData';
 import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings } from './types';
-import { pingDeviceNetwork, isDesktopApp } from './services/deviceConnection';
+import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './services/deviceConnection';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -132,10 +132,45 @@ export default function App() {
     setTimeout(() => setGlobalNotice(null), 4000);
   };
 
+  // Clean up any fake mock counts from previous version
+  useEffect(() => {
+    setDevices((prev) =>
+      prev.map((d) => {
+        if (d.userCount === 38 && d.fpCount === 72 && d.recordCount === 154) {
+          return {
+            ...d,
+            status: 'disconnected',
+            userCount: 0,
+            fpCount: 0,
+            faceCount: 0,
+            recordCount: 0,
+            lastSyncTime: 'لم تتم المزامنة بعد',
+            pingMs: undefined,
+          };
+        }
+        return d;
+      })
+    );
+  }, []);
+
+  const handleResetMockData = () => {
+    localStorage.removeItem('zkt_devices_v2');
+    setDevices(INITIAL_DEVICES.map((d) => ({
+      ...d,
+      status: 'disconnected',
+      userCount: 0,
+      fpCount: 0,
+      faceCount: 0,
+      recordCount: 0,
+      lastSyncTime: 'لم تتم المزامنة بعد',
+      pingMs: undefined,
+    })));
+    showNotification('تمت تصفية الذاكرة المؤقتة وإعادة ضبط بيانات الماكينات لحالتها الطبيعية.');
+  };
+
   // Auto-discover LAN devices on workstation launch (Only in Desktop Mode)
   useEffect(() => {
     if (!isDesktopApp()) {
-      // In web browser preview mode, never fake connection
       setDevices((prev) => prev.map((d) => ({ ...d, status: 'disconnected', pingMs: undefined })));
       return;
     }
@@ -177,10 +212,10 @@ export default function App() {
     };
   }, []);
 
-  // 1. Parallel Sync from all machines
+  // 1. Parallel Sync from all machines (Real ZKTeco Communication)
   const handleSyncAllDevices = async () => {
     if (!isDesktopApp()) {
-      showNotification('يتطلب الاتصال بالأجهزة تشغيل تطبيق الديسكتوب على نفس الشبكة المحلية.');
+      showNotification('سحب الحركات التلقائي عبر الشبكة متاح داخل تطبيق الديسكتوب. في المتصفح يمكنك استخدام "استيراد ملف USB".');
       return;
     }
 
@@ -192,67 +227,192 @@ export default function App() {
       }))
     );
 
-    const results = await Promise.all(
-      devices.map(async (d) => {
-        const res = await pingDeviceNetwork(d.ip, d.port);
-        return { id: d.id, success: res.success, pingMs: res.pingMs };
-      })
-    );
+    let connectedCount = 0;
+    let totalImported = 0;
+    const allNewRecords: AttendanceRecord[] = [];
+
+    // Query devices sequentially to keep socket communication stable
+    for (const d of devices) {
+      const res = await pullDeviceAttendanceLogs(d.ip, d.port);
+      if (res.success) {
+        connectedCount++;
+        const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
+          const matchedWorker = workers.find((w) => String(w.code) === String(r.userId));
+          const dateObj = new Date(r.recordTime);
+          const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+          const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
+          const punchState: 'IN' | 'OUT' = r.type === 1 ? 'OUT' : 'IN';
+
+          return {
+            id: `REC-${d.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
+            workerCode: Number(r.userId) || 1000 + i,
+            workerName: matchedWorker ? matchedWorker.name : `عامل كود #${r.userId}`,
+            department: matchedWorker ? matchedWorker.department : d.department,
+            timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
+            displayDate: dateStr,
+            displayTime: timeStr,
+            rawState: punchState,
+            resolvedState: punchState,
+            deviceId: d.id,
+            deviceName: d.name,
+            punchType: 'FINGERPRINT',
+          };
+        });
+
+        const newForThisDevice = pulledRecords.filter((pr) => 
+          !attendanceRecords.some((ar) => 
+            ar.workerCode === pr.workerCode && 
+            ar.displayDate === pr.displayDate && 
+            ar.displayTime === pr.displayTime && 
+            ar.deviceId === pr.deviceId
+          ) &&
+          !allNewRecords.some((ar) => 
+            ar.workerCode === pr.workerCode && 
+            ar.displayDate === pr.displayDate && 
+            ar.displayTime === pr.displayTime && 
+            ar.deviceId === pr.deviceId
+          )
+        );
+
+        allNewRecords.push(...newForThisDevice);
+        totalImported += newForThisDevice.length;
+
+        const totalRecordCount = res.deviceInfo?.logCounts ?? res.records.length;
+        const totalUserCount = res.deviceInfo?.userCounts ?? d.userCount;
+
+        setDevices((prev) =>
+          prev.map((dev) =>
+            dev.id === d.id
+              ? {
+                  ...dev,
+                  status: 'connected',
+                  pingMs: res.pingMs || 8,
+                  lastSyncTime: 'الآن',
+                  recordCount: totalRecordCount,
+                  userCount: totalUserCount,
+                }
+              : dev
+          )
+        );
+      } else {
+        setDevices((prev) =>
+          prev.map((dev) =>
+            dev.id === d.id
+              ? {
+                  ...dev,
+                  status: 'disconnected',
+                  pingMs: undefined,
+                }
+              : dev
+          )
+        );
+      }
+    }
+
+    if (allNewRecords.length > 0) {
+      setAttendanceRecords((prev) => [...allNewRecords, ...prev]);
+    }
 
     setIsSyncing(false);
-    let connectedCount = 0;
-
-    setDevices((prev) =>
-      prev.map((d) => {
-        const pingRes = results.find((r) => r.id === d.id);
-        const isOnline = Boolean(pingRes && pingRes.success);
-        if (isOnline) connectedCount++;
-        return {
-          ...d,
-          status: isOnline ? 'connected' : 'disconnected',
-          pingMs: isOnline ? pingRes?.pingMs : undefined,
-          lastSyncTime: isOnline ? 'الآن' : d.lastSyncTime,
-          recordCount: isOnline ? Math.max(d.recordCount, 12) : d.recordCount,
-        };
-      })
-    );
 
     if (connectedCount > 0) {
-      showNotification(`تم الاتصال بنجاح بـ ${connectedCount} من ${devices.length} ماكينات.`);
+      showNotification(`✅ تم الاتصال بـ ${connectedCount} من ${devices.length} ماكينات، وسحب ${totalImported} حركة جديدة إلى السجلات.`);
     } else {
-      showNotification(`تعذر الاتصال بالماكينات. تأكد من اتصالها بالشبكة وصحة عناوين IP.`);
+      showNotification(`❌ تعذر الاتصال بالماكينات. تأكد أن كابلات الشبكة موصولة وأن الكمبيوتر على نفس الراوتر (LAN).`);
     }
   };
 
-  // 2. Sync single device
+  // 2. Sync single device (Pull Real ZKTeco Attendance Records)
   const handleSyncSingleDevice = async (deviceId: number) => {
     const target = devices.find((d) => d.id === deviceId);
     if (!target) return;
+
+    if (!isDesktopApp()) {
+      showNotification(`سحب الحركات التلقائي عبر الشبكة (Port 4370) متاح داخل تطبيق الديسكتوب. في المتصفح يمكنك استخدام "استيراد ملف USB".`);
+      return;
+    }
 
     setDevices((prev) =>
       prev.map((d) => (d.id === deviceId ? { ...d, status: 'syncing' } : d))
     );
 
-    const res = await pingDeviceNetwork(target.ip, target.port);
-
-    setDevices((prev) =>
-      prev.map((d) =>
-        d.id === deviceId
-          ? {
-              ...d,
-              status: res.success ? 'connected' : 'disconnected',
-              pingMs: res.pingMs || 8,
-              lastSyncTime: res.success ? 'الآن' : d.lastSyncTime,
-              recordCount: res.success ? Math.max(d.recordCount, 15) : d.recordCount,
-            }
-          : d
-      )
-    );
+    const res = await pullDeviceAttendanceLogs(target.ip, target.port);
 
     if (res.success) {
-      showNotification(`✅ تم سحب الحركات بنجاح من (${target.name}) - زمن الاستجابة ${res.pingMs}ms.`);
+      const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
+        const matchedWorker = workers.find((w) => String(w.code) === String(r.userId));
+        const dateObj = new Date(r.recordTime);
+        const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
+        const punchState: 'IN' | 'OUT' = r.type === 1 ? 'OUT' : 'IN';
+
+        return {
+          id: `REC-${target.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
+          workerCode: Number(r.userId) || 1000 + i,
+          workerName: matchedWorker ? matchedWorker.name : `عامل كود #${r.userId}`,
+          department: matchedWorker ? matchedWorker.department : target.department,
+          timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
+          displayDate: dateStr,
+          displayTime: timeStr,
+          rawState: punchState,
+          resolvedState: punchState,
+          deviceId: target.id,
+          deviceName: target.name,
+          punchType: 'FINGERPRINT',
+        };
+      });
+
+      const newRecords = pulledRecords.filter((pr) => 
+        !attendanceRecords.some((ar) => 
+          ar.workerCode === pr.workerCode && 
+          ar.displayDate === pr.displayDate && 
+          ar.displayTime === pr.displayTime && 
+          ar.deviceId === pr.deviceId
+        )
+      );
+
+      if (newRecords.length > 0) {
+        setAttendanceRecords((prev) => [...newRecords, ...prev]);
+      }
+
+      const totalRecordCount = res.deviceInfo?.logCounts ?? res.records.length;
+      const totalUserCount = res.deviceInfo?.userCounts ?? target.userCount;
+
+      setDevices((prev) =>
+        prev.map((d) =>
+          d.id === deviceId
+            ? {
+                ...d,
+                status: 'connected',
+                pingMs: res.pingMs || 8,
+                lastSyncTime: 'الآن',
+                recordCount: totalRecordCount,
+                userCount: totalUserCount,
+              }
+            : d
+        )
+      );
+
+      if (res.records.length === 0) {
+        showNotification(`ℹ️ تم الاتصال بـ (${target.name}) بنجاح ولكن لا توجد حركات مخزنة في ذاكرة الجهاز.`);
+      } else if (newRecords.length > 0) {
+        showNotification(`✅ تم سحب ${newRecords.length} حركة جديدة بنجاح من (${target.name}) وتحديث السجلات!`);
+      } else {
+        showNotification(`ℹ️ تم الاتصال بـ (${target.name}) وسحب ${res.records.length} حركة (جميعها محفوظة مسبقاً).`);
+      }
     } else {
-      showNotification(`❌ ${res.message}`);
+      setDevices((prev) =>
+        prev.map((d) =>
+          d.id === deviceId
+            ? {
+                ...d,
+                status: 'disconnected',
+                pingMs: undefined,
+              }
+            : d
+        )
+      );
+      showNotification(`❌ فشل سحب الحركات من (${target.name}): ${res.error || res.message}`);
     }
   };
 
@@ -473,12 +633,22 @@ export default function App() {
             {activeTab === 'devices' && (
               <DeviceManager
                 devices={devices}
+                workers={workers}
                 onSyncDevice={handleSyncSingleDevice}
                 onSyncAllDevices={handleSyncAllDevices}
                 onImportUsbLogs={handleImportUsbLogs}
                 onUpdateDevice={handleUpdateDevice}
                 onAddDevice={handleAddDevice}
                 onDeleteDevice={handleDeleteDevice}
+                onImportWorkers={(newWorkers) => {
+                  setWorkers((prev) => {
+                    const existingCodes = new Set(prev.map((w) => w.code));
+                    const uniqueNew = newWorkers.filter((nw) => !existingCodes.has(nw.code));
+                    return [...uniqueNew, ...prev];
+                  });
+                  showNotification(`تم استيراد وإضافة ${newWorkers.length} عامل إلى قاعدة البيانات بنجاح.`);
+                }}
+                onResetMockData={handleResetMockData}
               />
             )}
 

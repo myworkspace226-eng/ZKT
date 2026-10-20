@@ -3,6 +3,50 @@ export interface PingResult {
   pingMs?: number;
   message: string;
   isDesktopNative: boolean;
+  warning?: string;
+}
+
+export interface ZktLogRecord {
+  id: number;
+  sn: number;
+  userId: string;
+  recordTime: string;
+  type: number; // 0: Check-in, 1: Check-out, etc.
+  state: number;
+  ip: string;
+}
+
+export interface DeviceLogsResult {
+  success: boolean;
+  pingMs?: number;
+  records: ZktLogRecord[];
+  deviceInfo?: any;
+  message: string;
+  error?: string;
+  isDesktopNative: boolean;
+}
+
+export interface ZktDeviceUser {
+  uid: number;
+  userId: string;
+  name: string;
+  role: number;
+  cardno: number;
+}
+
+export interface DeviceUsersResult {
+  success: boolean;
+  users: ZktDeviceUser[];
+  message: string;
+  error?: string;
+  isDesktopNative: boolean;
+}
+
+export interface DeviceActionResult {
+  success: boolean;
+  message: string;
+  error?: string;
+  isDesktopNative: boolean;
 }
 
 /**
@@ -18,14 +62,10 @@ export function isDesktopApp(): boolean {
 }
 
 /**
- * Checks overall network connectivity (LAN / Internet)
- * Uses navigator.onLine and native OS network interface check in Electron desktop.
+ * Checks overall network connectivity (LAN / Internet).
+ * In desktop mode, checks active physical network interface adapters.
  */
 export async function checkNetworkConnectivity(): Promise<boolean> {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    return false;
-  }
-
   if (isDesktopApp()) {
     try {
       const electron = (window as any).require('electron');
@@ -36,7 +76,7 @@ export async function checkNetworkConnectivity(): Promise<boolean> {
         }
       }
     } catch {
-      // Fallback to navigator
+      // Fallback
     }
   }
 
@@ -45,11 +85,9 @@ export async function checkNetworkConnectivity(): Promise<boolean> {
 
 /**
  * Tests network reachability to a ZKTeco biometric device.
- * In the Electron desktop application, uses native OS TCP sockets & ICMP ping to verify real LAN connectivity.
- * In web preview mode, reports real state without simulation.
+ * In desktop mode: uses native TCP socket to port 4370 + strict ICMP echo check.
  */
 export async function pingDeviceNetwork(ip: string, port: number = 4370): Promise<PingResult> {
-  // If running inside the native Windows Desktop Electron app:
   if (isDesktopApp()) {
     try {
       const electron = (window as any).require('electron');
@@ -58,14 +96,15 @@ export async function pingDeviceNetwork(ip: string, port: number = 4370): Promis
         if (res && res.success) {
           return {
             success: true,
-            pingMs: res.pingMs || 5,
+            pingMs: res.pingMs || 6,
             message: `تم الاتصال بنجاح بـ ${ip}:${port} (${res.pingMs}ms)`,
             isDesktopNative: true,
+            warning: res.warning,
           };
         } else {
           return {
             success: false,
-            message: `تعذر الاتصال بـ ${ip}:${port} (${res?.error || 'لم يتم الرد من الماكينة'}).`,
+            message: res?.error || `تعذر الاتصال بـ ${ip}:${port} (لم يتم الرد من الماكينة).`,
             isDesktopNative: true,
           };
         }
@@ -74,16 +113,171 @@ export async function pingDeviceNetwork(ip: string, port: number = 4370): Promis
       console.error('Desktop native ping error:', err);
       return {
         success: false,
-        message: `تعذر الاتصال بـ ${ip}:${port}.`,
+        message: `خطأ في الاتصال بالماكينة ${ip}:${port}.`,
         isDesktopNative: true,
       };
     }
   }
 
-  // When running inside a Web Browser (e.g. AI Studio preview):
+  // Web Browser Preview Mode
   return {
     success: false,
-    message: `تعذر الاتصال بـ ${ip}:${port} (يتطلب تشغيل تطبيق الديسكتوب للاتصال بالشبكة المحلية).`,
+    message: `يتطلب الاتصال بالماكينة تشغيل تطبيق الديسكتوب المثبت على نظام ويندوز داخل الشبكة المحلية.`,
+    isDesktopNative: false,
+  };
+}
+
+/**
+ * Connects directly to the ZKTeco hardware and pulls attendance punch records.
+ * Uses native TCP/UDP socket communication via ZKTeco binary protocol.
+ */
+export async function pullDeviceAttendanceLogs(
+  ip: string, 
+  port: number = 4370
+): Promise<DeviceLogsResult> {
+  if (isDesktopApp()) {
+    try {
+      const electron = (window as any).require('electron');
+      if (electron && electron.ipcRenderer) {
+        const res = await electron.ipcRenderer.invoke('zkt-pull-logs', { ip, port, timeout: 5000 });
+        return {
+          success: Boolean(res && res.success),
+          pingMs: res?.pingMs,
+          records: res?.records || [],
+          deviceInfo: res?.deviceInfo,
+          message: res?.message || `تم سحب الحركات بنجاح من ${ip}`,
+          error: res?.error,
+          isDesktopNative: true,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        records: [],
+        message: 'فشل استدعاء خدمة سحب الحركات',
+        error: err?.message || String(err),
+        isDesktopNative: true,
+      };
+    }
+  }
+
+  return {
+    success: false,
+    records: [],
+    message: 'سحب الحركات التلقائي عبر الشبكة متاح داخل تطبيق الديسكتوب فقط.',
+    error: 'في المتصفح يمكنك استخدام "استيراد ملف USB" لتحميل سجلات الحركات.',
+    isDesktopNative: false,
+  };
+}
+
+/**
+ * Pulls registered workers/users from the device hardware memory.
+ */
+export async function pullDeviceUsers(
+  ip: string, 
+  port: number = 4370
+): Promise<DeviceUsersResult> {
+  if (isDesktopApp()) {
+    try {
+      const electron = (window as any).require('electron');
+      if (electron && electron.ipcRenderer) {
+        const res = await electron.ipcRenderer.invoke('zkt-pull-users', { ip, port, timeout: 5000 });
+        return {
+          success: Boolean(res && res.success),
+          users: res?.users || [],
+          message: res?.message || `تم سحب العمال من ${ip}`,
+          error: res?.error,
+          isDesktopNative: true,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        users: [],
+        message: 'فشل استدعاء خدمة قراءة العمال من الماكينة',
+        error: err?.message || String(err),
+        isDesktopNative: true,
+      };
+    }
+  }
+
+  return {
+    success: false,
+    users: [],
+    message: 'سحب العمال متاح فقط عبر تطبيق الديسكتوب المتصل بالشبكة المحلية.',
+    isDesktopNative: false,
+  };
+}
+
+/**
+ * Uploads an employee/worker to the ZKTeco biometric device.
+ */
+export async function uploadUserToDevice(
+  ip: string,
+  port: number = 4370,
+  user: { code: number; name: string; id?: string | number }
+): Promise<DeviceActionResult> {
+  if (isDesktopApp()) {
+    try {
+      const electron = (window as any).require('electron');
+      if (electron && electron.ipcRenderer) {
+        const res = await electron.ipcRenderer.invoke('zkt-upload-user', { ip, port, user, timeout: 5000 });
+        return {
+          success: Boolean(res && res.success),
+          message: res?.message || `تم رفع العامل إلى الماكينة`,
+          error: res?.error,
+          isDesktopNative: true,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: 'فشل إرسال بيانات العامل إلى الماكينة',
+        error: err?.message || String(err),
+        isDesktopNative: true,
+      };
+    }
+  }
+
+  return {
+    success: false,
+    message: 'رفع العمال إلى الماكينة يتطلب تطبيق الديسكتوب المتصل بالشبكة المحلية.',
+    isDesktopNative: false,
+  };
+}
+
+/**
+ * Synchronizes the device hardware clock with the computer system clock.
+ */
+export async function syncDeviceTime(
+  ip: string,
+  port: number = 4370
+): Promise<DeviceActionResult> {
+  if (isDesktopApp()) {
+    try {
+      const electron = (window as any).require('electron');
+      if (electron && electron.ipcRenderer) {
+        const res = await electron.ipcRenderer.invoke('zkt-sync-time', { ip, port, timeout: 5000 });
+        return {
+          success: Boolean(res && res.success),
+          message: res?.message || `تم ضبط ساعة الماكينة`,
+          error: res?.error,
+          isDesktopNative: true,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: 'فشل ضبط توقيت الماكينة',
+        error: err?.message || String(err),
+        isDesktopNative: true,
+      };
+    }
+  }
+
+  return {
+    success: false,
+    message: 'ضبط توقيت الماكينة يتطلب تطبيق الديسكتوب.',
     isDesktopNative: false,
   };
 }

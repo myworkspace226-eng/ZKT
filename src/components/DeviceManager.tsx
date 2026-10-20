@@ -19,27 +19,39 @@ import {
   DownloadCloud,
   Globe
 } from 'lucide-react';
-import { Device } from '../types';
-import { pingDeviceNetwork, isDesktopApp } from '../services/deviceConnection';
+import { Device, Worker } from '../types';
+import { 
+  pingDeviceNetwork, 
+  isDesktopApp, 
+  pullDeviceUsers, 
+  uploadUserToDevice 
+} from '../services/deviceConnection';
+import { RotateCcw } from 'lucide-react';
 
 interface DeviceManagerProps {
   devices: Device[];
+  workers?: Worker[];
   onSyncDevice: (deviceId: number) => void;
   onSyncAllDevices: () => void;
   onImportUsbLogs: (fileContent: string) => void;
   onUpdateDevice: (device: Device) => void;
   onAddDevice: (device: Device) => void;
   onDeleteDevice: (deviceId: number) => void;
+  onImportWorkers?: (workers: Worker[]) => void;
+  onResetMockData?: () => void;
 }
 
 export const DeviceManager: React.FC<DeviceManagerProps> = ({
   devices,
+  workers = [],
   onSyncDevice,
   onSyncAllDevices,
   onImportUsbLogs,
   onUpdateDevice,
   onAddDevice,
   onDeleteDevice,
+  onImportWorkers,
+  onResetMockData,
 }) => {
   const [testingDeviceId, setTestingDeviceId] = useState<number | null>(null);
   const [showUsbModal, setShowUsbModal] = useState<boolean>(false);
@@ -98,34 +110,131 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
     setTimeout(() => setNotification(null), 7000);
   };
 
-  const handleQuickUploadUsers = (device: Device) => {
+  const handleQuickUploadUsers = async (device: Device) => {
+    if (!isDesktopApp()) {
+      setNotification({
+        type: 'error',
+        message: 'رفع بيانات العمال إلى الماكينة عبر الشبكة متاح داخل تطبيق الديسكتوب فقط.',
+      });
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+
+    setNotification({
+      type: 'success',
+      message: `جاري الاتصال بماكينة (${device.name}) ورفع بيانات العمال...`,
+    });
+
+    const targetWorkers = workers || [];
+    if (targetWorkers.length === 0) {
+      setNotification({
+        type: 'error',
+        message: 'لا يوجد عمال مسجلون في النظام لإرسالهم للماكينة.',
+      });
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+
+    let successCount = 0;
+    for (const w of targetWorkers) {
+      const res = await uploadUserToDevice(device.ip, device.port, {
+        code: w.code,
+        name: w.name,
+        id: w.id,
+      });
+      if (res.success) {
+        successCount++;
+      } else {
+        if (successCount === 0) {
+          onUpdateDevice({
+            ...device,
+            status: 'disconnected',
+            pingMs: undefined,
+          });
+          setNotification({
+            type: 'error',
+            message: `❌ فشل الاتصال بماكينة (${device.name}): ${res.error || 'الماكينة غير متصلة على الشبكة'}.`,
+          });
+          setTimeout(() => setNotification(null), 6000);
+          return;
+        }
+      }
+    }
+
     onUpdateDevice({
       ...device,
       status: 'connected',
-      userCount: Math.max(device.userCount, 38),
-      fpCount: Math.max(device.fpCount, 72),
+      userCount: Math.max(device.userCount, successCount),
       lastSyncTime: 'الآن',
     });
     setNotification({
       type: 'success',
-      message: `تم رفع وتثبيت أسماء وبيانات المستخدمين إلى ماكينة (${device.name}) بنجاح! ستظهر أسماؤهم الآن على شاشة الماكينة عند البصم.`,
+      message: `✅ تم رفع وتثبيت بيانات (${successCount}) عامل إلى ماكينة (${device.name}) بنجاح!`,
     });
     setTimeout(() => setNotification(null), 6000);
   };
 
-  const handleQuickDownloadUsers = (device: Device) => {
-    onUpdateDevice({
-      ...device,
-      status: 'connected',
-      userCount: Math.max(device.userCount, 38),
-      fpCount: Math.max(device.fpCount, 72),
-      recordCount: Math.max(device.recordCount, 154),
-      lastSyncTime: 'الآن',
-    });
+  const handleQuickDownloadUsers = async (device: Device) => {
+    if (!isDesktopApp()) {
+      setNotification({
+        type: 'error',
+        message: 'سحب قائمة العمال من ذاكرة الماكينة متاح داخل تطبيق الديسكتوب فقط.',
+      });
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+
     setNotification({
       type: 'success',
-      message: `تم فحص وسحب بيانات ومستخدمي ماكينة (${device.name}) بنجاح! تم استيراد البصمات والأكواد الجديدة إلى قاعدة البيانات.`,
+      message: `جاري الاتصال بماكينة (${device.name}) وقراءة ذاكرة المستخدمين...`,
     });
+
+    const res = await pullDeviceUsers(device.ip, device.port);
+    if (res.success) {
+      onUpdateDevice({
+        ...device,
+        status: 'connected',
+        userCount: res.users.length,
+        lastSyncTime: 'الآن',
+      });
+
+      if (onImportWorkers && res.users.length > 0) {
+        const newWorkers: Worker[] = res.users.map((u, i) => ({
+          id: `w-zkt-${device.id}-${u.userId}-${i}`,
+          code: Number(u.userId) || 1000 + i,
+          name: u.name,
+          department: device.department || 'إنتاج',
+          line: 'خط 1',
+          jobTitle: 'عامل تشغيل',
+          nationality: 'مصري',
+          shiftId: 'standard',
+          customGraceMinutes: 15,
+          isActive: true,
+          assignedDeviceIds: [device.id],
+          hasFingerprint: true,
+          hasFace: false,
+          joinDate: new Date().toISOString().slice(0, 10),
+          isNameSyncedToDevice: true,
+          enrolledOnDeviceName: device.name,
+        }));
+        onImportWorkers(newWorkers);
+      }
+
+      setNotification({
+        type: 'success',
+        message: `✅ تم سحب (${res.users.length}) مستخدم بنجاح من ذاكرة (${device.name}) وتحديث السجلات!`,
+      });
+    } else {
+      onUpdateDevice({
+        ...device,
+        status: 'disconnected',
+        pingMs: undefined,
+      });
+      setNotification({
+        type: 'error',
+        message: `❌ فشل سحب العمال من (${device.name}): ${res.error || res.message}`,
+      });
+    }
     setTimeout(() => setNotification(null), 6000);
   };
 
@@ -251,6 +360,17 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
             <Usb className="w-3.5 h-3.5 text-amber-400" />
             <span>استيراد ملف USB</span>
           </button>
+
+          {onResetMockData && (
+            <button
+              onClick={onResetMockData}
+              title="تصفير الأرقام التجريبية وإعادة فحص الماكينات الفعلية"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+              <span>تصفير الذاكرة المؤقتة</span>
+            </button>
+          )}
 
           <button
             onClick={onSyncAllDevices}
