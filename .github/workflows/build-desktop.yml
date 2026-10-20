@@ -67,9 +67,7 @@ jobs:
 
       - name: Package Windows Installer (.exe) with Electron Builder
         shell: bash
-        run: npx electron-builder --win nsis -c.publish=never
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win nsis --publish never
 
       - name: Upload Windows Setup .EXE (Direct Download)
         uses: actions/upload-artifact@v4

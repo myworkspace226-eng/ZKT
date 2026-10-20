@@ -50,6 +50,7 @@
   "build": {
     "appId": "com.zkt.biometric.attendance",
     "productName": "ZKT Biometric Pro",
+    "publish": null,
     "directories": {
       "output": "dist-electron"
     },
