@@ -1,0 +1,42 @@
+name: Build Windows Desktop App (.EXE)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # يتيح لك تشغيل البناء يدوياً بنقرة زر واحدة من تبويب Actions في GitHub
+
+jobs:
+  build-windows:
+    name: Build & Package Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Package Windows Installer (.exe) with Electron Builder
+        run: npx electron-builder --win nsis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows Setup .EXE (Direct Download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZKT-Biometric-Windows-Desktop-Setup
+          path: |
+            dist-electron/*.exe
+          retention-days: 30
