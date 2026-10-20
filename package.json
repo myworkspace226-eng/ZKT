@@ -39,6 +39,10 @@
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8"
   },
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "1.2.14",
+    "@rolldown/binding-linux-x64-gnu": "1.2.14"
+  },
   "build": {
     "appId": "com.zkt.biometric.attendance",
     "productName": "ZKT Biometric Pro",

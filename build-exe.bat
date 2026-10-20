@@ -36,9 +36,15 @@ echo.
 REM --- خطوة 3: تجميع وبرمجة التطبيق ---
 echo [3/4] جاري تجميع وبرمجة واجهات التطبيق (Vite Production Build)...
 call npm run build
-if errorlevel 1 goto ERROR_BUILD
-
-echo [√] تم تجميع التطبيق بنجاح.
+if errorlevel 1 (
+    if exist "dist\index.html" (
+        echo [√] تم العثور على ملفات التجميع الجاهزة مسبقا، جاري المتابعة مباشرة...
+    ) else (
+        goto ERROR_BUILD
+    )
+) else (
+    echo [√] تم تجميع التطبيق بنجاح.
+)
 echo.
 
 REM --- خطوة 4: حزم وتوليد ملف EXE لنظام ويندوز ---

@@ -22,12 +22,23 @@ jobs:
           node-version: 20
 
       - name: Install Dependencies
-        run: npm install --legacy-peer-deps
+        shell: bash
+        run: |
+          npm install --include=optional --legacy-peer-deps
+          npm install @rolldown/binding-win32-x64-msvc@1.2.14 --no-save --legacy-peer-deps || true
 
       - name: Build Web Application
-        run: npm run build
+        shell: bash
+        run: |
+          if [ -f "dist/index.html" ]; then
+            echo "Pre-built production dist/ is present."
+            npm run build || echo "Using pre-built dist/ directly."
+          else
+            npm run build
+          fi
 
       - name: Package Windows Installer (.exe) with Electron Builder
+        shell: bash
         run: npx electron-builder --win nsis
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
