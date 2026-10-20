@@ -37,6 +37,31 @@ jobs:
             npm run build
           fi
 
+      - name: Prepare Application Icons
+        shell: bash
+        run: |
+          mkdir -p build
+          # Ensure build/icon.ico exists with robust fallbacks
+          if [ -f "icon.ico" ]; then
+            echo "Using root icon.ico -> build/icon.ico"
+            cp -f icon.ico build/icon.ico
+          elif [ -f "public/favicon.ico" ]; then
+            echo "Using public/favicon.ico -> build/icon.ico"
+            cp -f public/favicon.ico build/icon.ico
+          fi
+
+          # Ensure icon.png exists in build as well
+          if [ -f "public/icon.png" ]; then
+            cp -f public/icon.png build/icon.png
+          fi
+
+          if [ -f "build/icon.ico" ]; then
+            cp -f build/icon.ico icon.ico
+          fi
+
+          echo "Icons status in build folder:"
+          ls -la build/
+
       - name: Package Windows Installer (.exe) with Electron Builder
         shell: bash
         run: npx electron-builder --win nsis

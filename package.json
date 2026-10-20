@@ -1,5 +1,8 @@
 {
   "name": "zkt-biometric-attendance",
+  "productName": "ZKT Biometric Pro",
+  "description": "Professional ZKTeco Biometric Attendance Management System for Windows",
+  "author": "ZKT Systems",
   "private": true,
   "version": "1.0.0",
   "main": "electron-main.cjs",
