@@ -1,13 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { isDesktopApp, checkNetworkConnectivity } from '../services/deviceConnection';
 import { 
   Clock, 
   Wifi, 
+  WifiOff,
   RefreshCw, 
-  Minimize2, 
-  Square, 
-  X, 
-  Building2,
-  HardDrive
+  Monitor,
+  Globe
 } from 'lucide-react';
 import { Device } from '../types';
 
@@ -24,7 +23,47 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [time, setTime] = useState<string>('');
   const [date, setDate] = useState<string>('');
+  const [isOnline, setIsOnline] = useState<boolean>(() => {
+    return typeof navigator !== 'undefined' ? navigator.onLine : true;
+  });
+  const [isCheckingNet, setIsCheckingNet] = useState<boolean>(false);
+  const isDesktop = isDesktopApp();
 
+  // Network Connectivity Check
+  const verifyNetwork = useCallback(async () => {
+    setIsCheckingNet(true);
+    try {
+      const status = await checkNetworkConnectivity();
+      setIsOnline(status);
+    } catch {
+      setIsOnline(false);
+    } finally {
+      setIsCheckingNet(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Initial verification
+    verifyNetwork();
+
+    // Browser network events
+    const handleOnline = () => verifyNetwork();
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Periodic network connectivity polling (every 6 seconds)
+    const netInterval = setInterval(verifyNetwork, 6000);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      clearInterval(netInterval);
+    };
+  }, [verifyNetwork]);
+
+  // Real-time Clock
   useEffect(() => {
     const updateDateTime = () => {
       const now = new Date();
@@ -40,51 +79,85 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-slate-100 select-none sticky top-0 z-40">
-      {/* Desktop Window Title Bar */}
-      <div className="flex items-center justify-between px-3 py-1 bg-slate-950 border-b border-slate-800/80 text-[11px] text-slate-400">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-          <span className="font-medium text-slate-300">نظام إدارة الحضور والانصراف - ZKT Client</span>
-        </div>
-
-        <div className="flex items-center gap-1 text-slate-500">
-          <button className="p-1 hover:text-slate-300 hover:bg-slate-800 rounded transition-colors" title="تصغير">
-            <Minimize2 className="w-3 h-3" />
-          </button>
-          <button className="p-1 hover:text-slate-300 hover:bg-slate-800 rounded transition-colors" title="تكبير">
-            <Square className="w-3 h-3" />
-          </button>
-          <button className="p-1 hover:text-red-400 hover:bg-red-950/40 rounded transition-colors" title="إغلاق">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
-
-      {/* Main Workspace Bar */}
+      {/* Main Workspace Bar - Native OS frame handles window controls */}
       <div className="flex items-center justify-between px-4 py-2.5">
-        {/* Brand */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-xs">
-            ZKT
+        {/* Brand & App Info */}
+        <div className="flex items-center gap-3 shrink-0">
+          <img 
+            src="/icon.png" 
+            alt="ZKT Pro Icon" 
+            className="w-8 h-8 rounded-lg shadow-md border border-cyan-500/30 object-cover" 
+          />
+          <div>
+            <div className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+              <span>نظام إدارة البصمة</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-mono">PRO</span>
+            </div>
           </div>
-          <div className="text-sm font-bold text-white tracking-tight">نظام إدارة البصمة</div>
         </div>
 
         {/* Live Status Indicators */}
-        <div className="flex items-center gap-4 text-xs text-slate-300">
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-slate-800/70 border border-slate-700/60 font-mono">
-            <Wifi className="w-3.5 h-3.5 text-slate-400" />
+        <div className="flex items-center gap-2.5 text-xs text-slate-300">
+          {/* 1. Network Connectivity Indicator - Disambiguated between Web Internet and Desktop LAN */}
+          <button
+            onClick={verifyNetwork}
+            disabled={isCheckingNet}
+            title={
+              isDesktop
+                ? (isOnline ? 'كارت الشبكة والاتصال المحلي نشط (اضغط لإعادة الفحص)' : 'شبكة الـ LAN المحلية مفصولة (اضغط للفحص)')
+                : (isOnline ? 'جهازك متصل بالإنترنت (معاينة متصفح فقط - الاتصال بماكينات البصمة LAN يتطلب تشغيل تطبيق الديسكتوب)' : 'لا يوجد اتصال بالإنترنت')
+            }
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
+              isOnline 
+                ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/60' 
+                : 'bg-rose-950/60 border-rose-700/60 text-rose-300 hover:bg-rose-900/60 animate-pulse'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50' : 'bg-rose-500 shadow-sm shadow-rose-500/50'}`} />
+            {isOnline ? (
+              <Wifi className={`w-3.5 h-3.5 text-emerald-400 ${isCheckingNet ? 'animate-spin' : ''}`} />
+            ) : (
+              <WifiOff className="w-3.5 h-3.5 text-rose-400" />
+            )}
+            <span>
+              {isDesktop 
+                ? (isOnline ? 'شبكة LAN: متصلة' : 'شبكة LAN: مفصولة')
+                : (isOnline ? 'الإنترنت: متصل' : 'الإنترنت: مفصول')
+              }
+            </span>
+          </button>
+
+          {/* 2. Environment Badge */}
+          {isDesktop ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800/80 border border-slate-700/60 text-slate-300 text-[11px] font-medium">
+              <Monitor className="w-3.5 h-3.5 text-emerald-400" />
+              <span>تطبيق الديسكتوب (LAN)</span>
+            </div>
+          ) : (
+            <div 
+              title="أنت في وضع المعاينة عبر المتصفح السحابي - الاتصال المباشر بالأجهزة متاح فقط عند فتح ملف الـ EXE"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800/80 border border-slate-700/60 text-slate-400 text-[11px] font-medium cursor-help"
+            >
+              <Globe className="w-3.5 h-3.5 text-cyan-400" />
+              <span>معاينة سحابية (بدون LAN)</span>
+            </div>
+          )}
+
+          {/* 3. Devices Status */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800/70 border border-slate-700/60 font-mono">
             <span className="text-[11px] text-slate-400">الأجهزة:</span>
             <span className="font-bold text-white tabular-nums">{connectedCount}/{devices.length}</span>
           </div>
 
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-slate-800/70 border border-slate-700/60 font-mono text-[11px]">
+          {/* 4. Live Clock & Date */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800/70 border border-slate-700/60 font-mono text-[11px]">
             <Clock className="w-3.5 h-3.5 text-slate-400" />
             <span className="font-bold text-white tabular-nums">{time}</span>
             <span className="text-slate-500">·</span>
             <span className="text-slate-300">{date}</span>
           </div>
 
+          {/* 5. Sync Action */}
           <button
             onClick={onSyncAll}
             disabled={isSyncing}
