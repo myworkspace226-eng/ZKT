@@ -229,6 +229,10 @@ export default function App() {
 
     let connectedCount = 0;
     let totalImported = 0;
+    // Build an indexed key set of existing records for O(1) lightning-fast duplicate checking
+    const existingKeys = new Set(
+      attendanceRecords.map((ar) => `${ar.workerCode}_${ar.displayDate}_${ar.displayTime}_${ar.deviceId}`)
+    );
     const allNewRecords: AttendanceRecord[] = [];
 
     // Query devices sequentially to keep socket communication stable
@@ -259,20 +263,14 @@ export default function App() {
           };
         });
 
-        const newForThisDevice = pulledRecords.filter((pr) => 
-          !attendanceRecords.some((ar) => 
-            ar.workerCode === pr.workerCode && 
-            ar.displayDate === pr.displayDate && 
-            ar.displayTime === pr.displayTime && 
-            ar.deviceId === pr.deviceId
-          ) &&
-          !allNewRecords.some((ar) => 
-            ar.workerCode === pr.workerCode && 
-            ar.displayDate === pr.displayDate && 
-            ar.displayTime === pr.displayTime && 
-            ar.deviceId === pr.deviceId
-          )
-        );
+        const newForThisDevice: AttendanceRecord[] = [];
+        for (const pr of pulledRecords) {
+          const key = `${pr.workerCode}_${pr.displayDate}_${pr.displayTime}_${pr.deviceId}`;
+          if (!existingKeys.has(key)) {
+            existingKeys.add(key);
+            newForThisDevice.push(pr);
+          }
+        }
 
         allNewRecords.push(...newForThisDevice);
         totalImported += newForThisDevice.length;
@@ -362,14 +360,13 @@ export default function App() {
         };
       });
 
-      const newRecords = pulledRecords.filter((pr) => 
-        !attendanceRecords.some((ar) => 
-          ar.workerCode === pr.workerCode && 
-          ar.displayDate === pr.displayDate && 
-          ar.displayTime === pr.displayTime && 
-          ar.deviceId === pr.deviceId
-        )
+      const existingKeys = new Set(
+        attendanceRecords.map((ar) => `${ar.workerCode}_${ar.displayDate}_${ar.displayTime}_${ar.deviceId}`)
       );
+      const newRecords = pulledRecords.filter((pr) => {
+        const key = `${pr.workerCode}_${pr.displayDate}_${pr.displayTime}_${pr.deviceId}`;
+        return !existingKeys.has(key);
+      });
 
       if (newRecords.length > 0) {
         setAttendanceRecords((prev) => [...newRecords, ...prev]);
@@ -642,11 +639,29 @@ export default function App() {
                 onDeleteDevice={handleDeleteDevice}
                 onImportWorkers={(newWorkers) => {
                   setWorkers((prev) => {
-                    const existingCodes = new Set(prev.map((w) => w.code));
-                    const uniqueNew = newWorkers.filter((nw) => !existingCodes.has(nw.code));
-                    return [...uniqueNew, ...prev];
+                    const updated = [...prev];
+                    const codeToIdx = new Map(updated.map((w, idx) => [w.code, idx]));
+                    const trulyNew: Worker[] = [];
+
+                    for (const nw of newWorkers) {
+                      if (codeToIdx.has(nw.code)) {
+                        const idx = codeToIdx.get(nw.code)!;
+                        // Update with real name from machine if available
+                        if (nw.name && !nw.name.startsWith('عامل كود #')) {
+                          updated[idx] = {
+                            ...updated[idx],
+                            name: nw.name,
+                            isNameSyncedToDevice: true,
+                            hasFingerprint: true,
+                          };
+                        }
+                      } else {
+                        trulyNew.push(nw);
+                      }
+                    }
+                    return [...trulyNew, ...updated];
                   });
-                  showNotification(`تم استيراد وإضافة ${newWorkers.length} عامل إلى قاعدة البيانات بنجاح.`);
+                  showNotification(`✅ تم سحب وتحديث بيانات ${newWorkers.length} عامل في قاعدة البيانات بنجاح.`);
                 }}
                 onResetMockData={handleResetMockData}
               />

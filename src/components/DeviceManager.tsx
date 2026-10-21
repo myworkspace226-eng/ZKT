@@ -17,16 +17,18 @@ import {
   ShieldAlert,
   UploadCloud,
   DownloadCloud,
-  Globe
+  Globe,
+  DatabaseZap,
+  RotateCcw
 } from 'lucide-react';
 import { Device, Worker } from '../types';
 import { 
   pingDeviceNetwork, 
   isDesktopApp, 
   pullDeviceUsers, 
-  uploadUserToDevice 
+  uploadUserToDevice,
+  clearDeviceAttendanceLog
 } from '../services/deviceConnection';
-import { RotateCcw } from 'lucide-react';
 
 interface DeviceManagerProps {
   devices: Device[];
@@ -79,6 +81,58 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
   });
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  // Secure Memory Wipe State
+  const [deviceToWipe, setDeviceToWipe] = useState<Device | null>(null);
+  const [wipeConfirmText, setWipeConfirmText] = useState<string>('');
+  const [isWiping, setIsWiping] = useState<boolean>(false);
+  const [acknowledgedBackup, setAcknowledgedBackup] = useState<boolean>(false);
+
+  const handleExecuteWipeMemory = async () => {
+    if (!deviceToWipe) return;
+
+    if (!isDesktopApp()) {
+      setNotification({
+        type: 'error',
+        message: 'تفريغ ذاكرة الماكينة عبر الشبكة متاح داخل تطبيق الديسكتوب فقط.',
+      });
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+
+    setIsWiping(true);
+    try {
+      const res = await clearDeviceAttendanceLog(deviceToWipe.ip, deviceToWipe.port);
+      if (res.success) {
+        onUpdateDevice({
+          ...deviceToWipe,
+          recordCount: 0,
+          lastSyncTime: 'الآن',
+        });
+        setNotification({
+          type: 'success',
+          message: `✅ ${res.message || `تم تفريغ ذاكرة حركات (${deviceToWipe.name}) بنجاح!`}`,
+        });
+        setDeviceToWipe(null);
+        setWipeConfirmText('');
+        setAcknowledgedBackup(false);
+      } else {
+        setNotification({
+          type: 'error',
+          message: `❌ ${res.error || res.message || 'تعذر تفريغ ذاكرة الماكينة'}`,
+        });
+      }
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: `❌ خطأ في الاتصال: ${err?.message || String(err)}`,
+      });
+    } finally {
+      setIsWiping(false);
+      setTimeout(() => setNotification(null), 6000);
+    }
+  };
+
 
   const handleTestPing = async (device: Device) => {
     setTestingDeviceId(device.id);
@@ -494,6 +548,19 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                     <DownloadCloud className="w-3.5 h-3.5 text-amber-400" />
                     <span>سحب عمال</span>
                   </button>
+
+                  <button
+                    onClick={() => {
+                      setDeviceToWipe(device);
+                      setWipeConfirmText('');
+                      setAcknowledgedBackup(false);
+                    }}
+                    className="p-1.5 rounded bg-slate-800 hover:bg-rose-950/40 text-rose-300 hover:text-rose-200 border border-slate-700/60 hover:border-rose-700/50 transition-colors cursor-pointer text-[11px] flex items-center gap-1"
+                    title="تفريغ ذاكرة حركات الماكينة بأمان لتسريعها (CMD_CLEAR_ATTLOG)"
+                  >
+                    <DatabaseZap className="w-3.5 h-3.5 text-rose-400" />
+                    <span>تفريغ الذاكرة</span>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-1">
@@ -737,6 +804,114 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                 className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium cursor-pointer"
               >
                 استيراد الحركات الآن
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Safe Clear Memory Modal (CMD_CLEAR_ATTLOG) */}
+      {deviceToWipe && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-900/60 rounded-xl max-w-lg w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-400">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">تفريغ ذاكرة حركات الماكينة بأمان</h3>
+                  <p className="text-[11px] text-slate-400">{deviceToWipe.name} ({deviceToWipe.ip})</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setDeviceToWipe(null);
+                  setWipeConfirmText('');
+                  setAcknowledgedBackup(false);
+                }}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="bg-amber-950/30 border border-amber-800/50 rounded-lg p-3 text-amber-200/90 space-y-1.5">
+                <div className="font-bold flex items-center gap-1.5 text-amber-300">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>تأكيد أمان البيانات والحسابات:</span>
+                </div>
+                <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-300 pr-1">
+                  <li>يقوم هذا الخيار بإرسال أمر ZKTeco القياسي <code className="text-amber-300 font-mono">CMD_CLEAR_ATTLOG</code> لمسح سجلات الحركات السابقة فقط.</li>
+                  <li><strong className="text-emerald-400">لن يتم مسح أي عامل أو بصمة إصبع أو بصمة وجه أو كود موظف أو كلمة سر</strong> (بيانات العمال تبقى كاملة 100% في الماكينة).</li>
+                  <li>يساعد هذا الإجراء على تسريع استجابة الماكينة ومنع ظهور رسالة "الذاكرة ممتلئة".</li>
+                  <li>جميع الحركات التي تم سحبها مسبقاً محفوظة بأمان في قاعدة بيانات البرنامج وأرشيفه.</li>
+                </ul>
+              </div>
+
+              <div className="bg-slate-950 p-3 rounded border border-slate-800 text-[11px] space-y-1">
+                <div className="text-slate-400">الماكينة المستهدفة: <span className="text-white font-bold">{deviceToWipe.name}</span></div>
+                <div className="text-slate-400 font-mono">عنوان الاتصال: <span className="text-blue-400">{deviceToWipe.ip}:{deviceToWipe.port}</span></div>
+                <div className="text-slate-400 font-mono">عدد الحركات الحالية في الماكينة: <span className="text-amber-400 font-bold">{deviceToWipe.recordCount.toLocaleString('ar-EG')} سجل</span></div>
+              </div>
+
+              <label className="flex items-start gap-2 p-2.5 rounded bg-slate-950 border border-slate-800 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={acknowledgedBackup}
+                  onChange={(e) => setAcknowledgedBackup(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-700 text-rose-600 focus:ring-0"
+                />
+                <span className="text-[11px] text-slate-300">
+                  أقر بأنني قمت بسحب الحركات أو لدي نسخة احتياطية منها، وأرغب في تفريغ سجلات الحركات القديمة من ذاكرة الماكينة.
+                </span>
+              </label>
+
+              <div>
+                <label className="block text-[11px] text-slate-300 mb-1">
+                  للتأكيد، اكتب كلمة <strong className="text-rose-400 font-bold">"مسح"</strong> في الحقل التالي:
+                </label>
+                <input
+                  type="text"
+                  value={wipeConfirmText}
+                  onChange={(e) => setWipeConfirmText(e.target.value)}
+                  placeholder='اكتب "مسح" لتفعيل زر التأكيد'
+                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white text-xs focus:outline-none focus:border-rose-500 font-mono text-center"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeviceToWipe(null);
+                  setWipeConfirmText('');
+                  setAcknowledgedBackup(false);
+                }}
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExecuteWipeMemory}
+                disabled={!acknowledgedBackup || wipeConfirmText.trim() !== 'مسح' || isWiping}
+                className="px-4 py-1.5 rounded bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                {isWiping ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>جاري تفريغ الذاكرة بأمان...</span>
+                  </>
+                ) : (
+                  <>
+                    <DatabaseZap className="w-3.5 h-3.5" />
+                    <span>تأكيد تفريغ الذاكرة الآن</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

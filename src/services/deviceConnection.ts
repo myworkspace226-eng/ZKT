@@ -281,3 +281,41 @@ export async function syncDeviceTime(
     isDesktopNative: false,
   };
 }
+
+/**
+ * Safely clears attendance logs on the device memory (CMD_CLEAR_ATTLOG).
+ * Preserves user accounts, cards, and fingerprint templates.
+ */
+export async function clearDeviceAttendanceLog(
+  ip: string,
+  port: number = 4370
+): Promise<DeviceActionResult> {
+  if (isDesktopApp()) {
+    try {
+      const electron = (window as any).require('electron');
+      if (electron && electron.ipcRenderer) {
+        const res = await electron.ipcRenderer.invoke('zkt-clear-attendance-log', { ip, port, timeout: 8000 });
+        return {
+          success: Boolean(res && res.success),
+          message: res?.message || `تم تفريغ ذاكرة الحركات للماكينة بنجاح`,
+          error: res?.error,
+          isDesktopNative: true,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: 'فشل تفريغ ذاكرة الحركات للماكينة',
+        error: err?.message || String(err),
+        isDesktopNative: true,
+      };
+    }
+  }
+
+  return {
+    success: false,
+    message: 'تفريغ ذاكرة الماكينة يتطلب تشغيل تطبيق الديسكتوب.',
+    isDesktopNative: false,
+  };
+}
+

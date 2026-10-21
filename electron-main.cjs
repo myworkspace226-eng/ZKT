@@ -7,18 +7,92 @@
 const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const path = require('path');
 const net = require('net');
+const fs = require('fs');
 const { exec } = require('child_process');
+
+// Patch zkteco-js to decode Arabic employee names correctly using Windows-1256 & UTF-8
+try {
+  const iconv = require('iconv-lite');
+  const zktUtils = require('zkteco-js/src/helper/utils');
+
+  function decodeArabicNameBuffer(buf) {
+    if (!buf || buf.length === 0) return '';
+    const nullIdx = buf.indexOf(0);
+    const cleanBuf = nullIdx !== -1 ? buf.subarray(0, nullIdx) : buf;
+    if (cleanBuf.length === 0) return '';
+
+    // 1. First priority: Windows-1256 (standard Arabic codepage for ZKTeco hardware)
+    try {
+      const win1256Str = iconv.decode(cleanBuf, 'win1256').trim();
+      if (/[\u0600-\u06FF]/.test(win1256Str)) {
+        return win1256Str;
+      }
+    } catch {}
+
+    // 2. Second priority: UTF-8
+    try {
+      const utf8Str = cleanBuf.toString('utf8').trim();
+      if (/[\u0600-\u06FF]/.test(utf8Str)) {
+        return utf8Str;
+      }
+    } catch {}
+
+    // 3. Fallback: Clean printable string
+    const fallback = cleanBuf.toString('utf8').replace(/[\x00-\x1F\x7F]/g, '').trim();
+    return fallback;
+  }
+
+  if (zktUtils && zktUtils.decodeUserData72) {
+    const origDecode72 = zktUtils.decodeUserData72;
+    zktUtils.decodeUserData72 = (userData) => {
+      const user = origDecode72(userData);
+      if (user && userData.length >= 72) {
+        const rawNameBuf = userData.subarray(11, 35);
+        const decoded = decodeArabicNameBuffer(rawNameBuf);
+        if (decoded) {
+          user.name = decoded;
+        }
+      }
+      return user;
+    };
+  }
+
+  if (zktUtils && zktUtils.decodeUserData28) {
+    const origDecode28 = zktUtils.decodeUserData28;
+    zktUtils.decodeUserData28 = (userData) => {
+      const user = origDecode28(userData);
+      if (user && userData.length >= 28) {
+        const rawNameBuf = userData.subarray(8, 16);
+        const decoded = decodeArabicNameBuffer(rawNameBuf);
+        if (decoded) {
+          user.name = decoded;
+        }
+      }
+      return user;
+    };
+  }
+} catch (patchErr) {
+  console.warn('Could not patch zkteco-js for Arabic decoding:', patchErr);
+}
 
 let mainWindow = null;
 
 function createWindow() {
+  let iconPath = path.join(__dirname, 'build', 'icon.ico');
+  if (!fs.existsSync(iconPath)) {
+    iconPath = path.join(__dirname, 'icon.ico');
+  }
+  if (!fs.existsSync(iconPath)) {
+    iconPath = path.join(__dirname, 'dist', 'favicon.ico');
+  }
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1024,
     minHeight: 700,
     title: 'ZKT Biometric Cloud - محطة إدارة البصمة والحضور (مصانع الملابس)',
-    icon: path.join(__dirname, 'build', 'icon.ico'),
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -331,3 +405,34 @@ ipcMain.handle('zkt-check-network', async () => {
     return { online: false, adapters: [] };
   }
 });
+
+/**
+ * 7. Secure Clear Attendance Log from Device Memory
+ * Frees up device memory by removing historical punches (CMD_CLEAR_ATTLOG)
+ * NEVER removes users, biometric templates, or credentials.
+ */
+ipcMain.handle('zkt-clear-attendance-log', async (event, { ip, port = 4370, timeout = 8000 }) => {
+  let zk = null;
+  try {
+    const Zkteco = require('zkteco-js');
+    zk = new Zkteco(ip, port, timeout, 5000);
+    await zk.createSocket();
+    await zk.clearAttendanceLog();
+    try {
+      await zk.disconnect();
+    } catch {}
+    return {
+      success: true,
+      message: `تم تفريغ ذاكرة حركات الماكينة (${ip}) بنجاح وتسريعها، مع الحفاظ التام على بيانات العمال وبصماتهم`,
+    };
+  } catch (err) {
+    if (zk) {
+      try { await zk.disconnect(); } catch {}
+    }
+    return {
+      success: false,
+      error: (err && err.message) ? err.message : `تعذر تفريغ ذاكرة الحركات من الماكينة (${ip})`,
+    };
+  }
+});
+

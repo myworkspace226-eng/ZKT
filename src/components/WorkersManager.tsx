@@ -16,8 +16,10 @@ import {
   HardDrive,
   X,
   Radio,
-  Tag
+  Tag,
+  Upload
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Worker, Device } from '../types';
 import { exportToExcel } from '../utils/attendanceEngine';
 
@@ -250,6 +252,81 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     exportToExcel(data, 'العاملين', `سجل_الموظفين_${new Date().toISOString().slice(0, 10)}`);
   };
 
+  const handleImportExcelWorkers = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+        if (!data || data.length === 0) {
+          setNotification('الملف فارغ أو بتنسيق غير متوافق.');
+          return;
+        }
+
+        let updatedCount = 0;
+        let addedCount = 0;
+
+        data.forEach((row, idx) => {
+          const rawCode = row['كود'] ?? row['الكود'] ?? row['كود العامل'] ?? row['code'] ?? row['Code'] ?? row['ID'] ?? row['id'];
+          const codeNum = Number(rawCode);
+          if (!codeNum || isNaN(codeNum)) return;
+
+          const rawName = row['اسم'] ?? row['الاسم'] ?? row['اسم العامل'] ?? row['الموظف'] ?? row['name'] ?? row['Name'];
+          const nameStr = rawName ? String(rawName).trim() : `عامل #${codeNum}`;
+
+          const rawDept = row['القسم'] ?? row['department'] ?? row['Dept'] ?? 'إنتاج';
+          const deptStr = rawDept ? String(rawDept).trim() : 'إنتاج';
+
+          const existing = workers.find((w) => w.code === codeNum);
+          if (existing) {
+            onUpdateWorker({
+              ...existing,
+              name: nameStr,
+              department: deptStr || existing.department,
+              isNameSyncedToDevice: false,
+            });
+            updatedCount++;
+          } else {
+            const newW: Worker = {
+              id: `w-imp-${codeNum}-${idx}`,
+              code: codeNum,
+              name: nameStr,
+              department: deptStr,
+              line: row['الخط'] ? String(row['الخط']) : 'خط 1',
+              jobTitle: row['الوظيفة'] ? String(row['الوظيفة']) : 'عامل تشغيل',
+              nationality: 'مصري',
+              shiftId: 'standard',
+              customGraceMinutes: 15,
+              isActive: true,
+              assignedDeviceIds: devices.map((d) => d.id),
+              hasFingerprint: true,
+              hasFace: false,
+              joinDate: new Date().toISOString().slice(0, 10),
+              isNameSyncedToDevice: false,
+            };
+            onAddWorker(newW);
+            addedCount++;
+          }
+        });
+
+        setNotification(`✅ تم بنجاح استيراد وتحديث (${updatedCount + addedCount}) عامل بأسمائهم العربية!`);
+        setTimeout(() => setNotification(null), 6000);
+      } catch (err: any) {
+        setNotification(`❌ حدث خطأ أثناء قراءة ملف الإكسيل: ${err?.message || String(err)}`);
+        setTimeout(() => setNotification(null), 6000);
+      }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = '';
+  };
+
   return (
     <div className="space-y-3.5">
       {/* Toast Notification */}
@@ -276,6 +353,18 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Import Workers from Excel */}
+          <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors cursor-pointer">
+            <Upload className="w-3.5 h-3.5 text-blue-400" />
+            <span>استيراد أسماء من Excel</span>
+            <input
+              type="file"
+              accept=".xlsx, .xls, .csv"
+              className="hidden"
+              onChange={handleImportExcelWorkers}
+            />
+          </label>
+
           {/* Biometric Sync / Download / Upload */}
           <button
             onClick={() => {
