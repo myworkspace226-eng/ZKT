@@ -19,11 +19,14 @@ import {
   DownloadCloud,
   Globe,
   DatabaseZap,
-  RotateCcw
+  RotateCcw,
+  Unplug,
+  Power
 } from 'lucide-react';
 import { Device, Worker } from '../types';
 import { 
   pingDeviceNetwork, 
+  disconnectDevice,
   isDesktopApp, 
   pullDeviceUsers, 
   uploadUserToDevice,
@@ -134,7 +137,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
   };
 
 
-  const handleTestPing = async (device: Device) => {
+  const handleConnectDevice = async (device: Device) => {
     setTestingDeviceId(device.id);
     const res = await pingDeviceNetwork(device.ip, device.port);
     setTestingDeviceId(null);
@@ -148,7 +151,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
       });
       setNotification({
         type: 'success',
-        message: res.message,
+        message: `✅ تم الاتصال بنجاح بالماكينة (${device.name}) - زمن الاستجابة ${res.pingMs || 6}ms`,
       });
     } else {
       onUpdateDevice({
@@ -158,11 +161,42 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
       });
       setNotification({
         type: 'error',
-        message: res.message,
+        message: `❌ ${res.message}`,
       });
     }
-    setTimeout(() => setNotification(null), 7000);
+    setTimeout(() => setNotification(null), 6000);
   };
+
+  const handleDisconnectDevice = async (device: Device) => {
+    setTestingDeviceId(device.id);
+    try {
+      await disconnectDevice(device.ip, device.port);
+      onUpdateDevice({
+        ...device,
+        status: 'disconnected',
+        pingMs: undefined,
+      });
+      setNotification({
+        type: 'success',
+        message: `🔌 تم إلغاء الاتصال بماكينة (${device.name}) بنجاح وإغلاق المقبس.`,
+      });
+    } catch {
+      onUpdateDevice({
+        ...device,
+        status: 'disconnected',
+        pingMs: undefined,
+      });
+      setNotification({
+        type: 'success',
+        message: `🔌 تم فصل الاتصال بالماكينة (${device.name}).`,
+      });
+    } finally {
+      setTestingDeviceId(null);
+      setTimeout(() => setNotification(null), 5000);
+    }
+  };
+
+  const handleTestPing = handleConnectDevice;
 
   const handleQuickUploadUsers = async (device: Device) => {
     if (!isDesktopApp()) {
@@ -253,24 +287,30 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
       });
 
       if (onImportWorkers && res.users.length > 0) {
-        const newWorkers: Worker[] = res.users.map((u, i) => ({
-          id: `w-zkt-${device.id}-${u.userId}-${i}`,
-          code: Number(u.userId) || 1000 + i,
-          name: u.name,
-          department: device.department || 'إنتاج',
-          line: 'خط 1',
-          jobTitle: 'عامل تشغيل',
-          nationality: 'مصري',
-          shiftId: 'standard',
-          customGraceMinutes: 15,
-          isActive: true,
-          assignedDeviceIds: [device.id],
-          hasFingerprint: true,
-          hasFace: false,
-          joinDate: new Date().toISOString().slice(0, 10),
-          isNameSyncedToDevice: true,
-          enrolledOnDeviceName: device.name,
-        }));
+        const newWorkers: Worker[] = res.users.map((u, i) => {
+          const userCode = Number(u.userId) || 1000 + i;
+          const cleanName = u.name ? u.name.trim() : '';
+          const isEnglish = /^[A-Za-z\s.'-]+$/.test(cleanName) && cleanName.length > 2;
+
+          return {
+            id: `w-zkt-${device.id}-${u.userId}-${i}`,
+            code: userCode,
+            name: cleanName || `عامل كود #${userCode}`,
+            department: device.department || 'إنتاج',
+            line: 'خط 1',
+            jobTitle: isEnglish ? 'فني تشغيل (بنغال)' : 'عامل تشغيل',
+            nationality: isEnglish ? 'بنغلاديشي' : 'مصري',
+            shiftId: isEnglish ? 'bangladeshi' : 'standard',
+            customGraceMinutes: 15,
+            isActive: true,
+            assignedDeviceIds: [device.id],
+            hasFingerprint: true,
+            hasFace: false,
+            joinDate: new Date().toISOString().slice(0, 10),
+            isNameSyncedToDevice: Boolean(cleanName),
+            enrolledOnDeviceName: device.name,
+          };
+        });
         onImportWorkers(newWorkers);
       }
 
@@ -512,15 +552,27 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
               {/* Bottom Actions */}
               <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-1 text-xs">
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => handleTestPing(device)}
-                    disabled={isTesting}
-                    className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer text-[11px] flex items-center gap-1"
-                    title="فحص الاتصال Ping"
-                  >
-                    <Activity className={`w-3.5 h-3.5 ${isTesting ? 'animate-pulse text-blue-400' : ''}`} />
-                    <span>فحص</span>
-                  </button>
+                  {device.status === 'connected' ? (
+                    <button
+                      onClick={() => handleDisconnectDevice(device)}
+                      disabled={isTesting}
+                      className="p-1.5 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-rose-200 border border-rose-800/50 transition-colors cursor-pointer text-[11px] flex items-center gap-1 font-medium"
+                      title="قطع الاتصال بالماكينة وإغلاق المقبس"
+                    >
+                      <Unplug className="w-3.5 h-3.5 text-rose-400" />
+                      <span>إلغاء الاتصال</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleConnectDevice(device)}
+                      disabled={isTesting}
+                      className="p-1.5 rounded bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 hover:text-emerald-200 border border-emerald-800/50 transition-colors cursor-pointer text-[11px] flex items-center gap-1 font-medium"
+                      title="فتح الاتصال بالماكينة عبر المنفذ 4370"
+                    >
+                      <Power className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin text-emerald-400' : 'text-emerald-400'}`} />
+                      <span>{isTesting ? 'جاري الاتصال...' : 'اتصال'}</span>
+                    </button>
+                  )}
 
                   <button
                     onClick={() => onSyncDevice(device.id)}

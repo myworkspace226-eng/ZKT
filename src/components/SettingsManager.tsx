@@ -221,6 +221,28 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Section 4: System & Developer Information */}
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2 text-white font-bold text-xs pb-2 border-b border-slate-800">
+            <Server className="w-4 h-4 text-cyan-400" />
+            <span>معلومات النظام والترخيص والمطور</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
+              <span className="text-[11px] text-slate-400 block mb-1">مطور النظام والبرنامج</span>
+              <span className="font-bold text-cyan-300 font-mono text-sm">Muhammad Abdullah</span>
+            </div>
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
+              <span className="text-[11px] text-slate-400 block mb-1">رقم إصدار البرنامج</span>
+              <span className="font-bold text-emerald-400 font-mono text-sm">V 1.0.0 (النسخة المستقرة)</span>
+            </div>
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
+              <span className="text-[11px] text-slate-400 block mb-1">نمط العمل والاتصال</span>
+              <span className="font-medium text-slate-200">محلي بدون إنترنت (LAN Port 4370)</span>
+            </div>
+          </div>
+        </div>
       </form>
 
       {/* Reset Confirmation Modal */}

@@ -135,8 +135,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Footer Info */}
       <div className="p-3 border-t border-slate-800/80 text-[10px] text-slate-400 bg-slate-950/40">
         <div className="flex items-center justify-between font-mono">
-          <span>ZKT Pro Client</span>
-          <span className="text-emerald-400 font-bold">V 2.6.0</span>
+          <span title="مطور النظام">المطور: Muhammad Abdullah</span>
+          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 1.0.0</span>
         </div>
       </div>
     </aside>

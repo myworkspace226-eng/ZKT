@@ -319,3 +319,39 @@ export async function clearDeviceAttendanceLog(
   };
 }
 
+/**
+ * Disconnects from the biometric device socket and clears the active session.
+ */
+export async function disconnectDevice(
+  ip: string,
+  port: number = 4370
+): Promise<DeviceActionResult> {
+  if (isDesktopApp()) {
+    try {
+      const electron = (window as any).require('electron');
+      if (electron && electron.ipcRenderer) {
+        const res = await electron.ipcRenderer.invoke('zkt-disconnect-device', { ip, port });
+        return {
+          success: Boolean(res && res.success),
+          message: res?.message || `تم إلغاء الاتصال بالماكينة (${ip}) بنجاح`,
+          isDesktopNative: true,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: 'فشل إلغاء الاتصال بالماكينة',
+        error: err?.message || String(err),
+        isDesktopNative: true,
+      };
+    }
+  }
+
+  return {
+    success: true,
+    message: `تم إلغاء الاتصال بالماكينة (${ip}) بنجاح.`,
+    isDesktopNative: false,
+  };
+}
+
+

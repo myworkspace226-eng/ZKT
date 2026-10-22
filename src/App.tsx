@@ -413,10 +413,22 @@ export default function App() {
     }
   };
 
-  // 3. Manual Attendance Record
+  // 3. Attendance Records Handlers
   const handleAddManualRecord = (record: AttendanceRecord) => {
     setAttendanceRecords((prev) => [record, ...prev]);
     showNotification(`تمت إضافة الحركة للعامل ${record.workerName}.`);
+  };
+
+  const handleUpdateRecord = (updatedRecord: AttendanceRecord) => {
+    setAttendanceRecords((prev) =>
+      prev.map((r) => (r.id === updatedRecord.id ? updatedRecord : r))
+    );
+    showNotification(`✅ تم تعديل بصمة العامل (${updatedRecord.workerName}) بنجاح.`);
+  };
+
+  const handleDeleteRecord = (recordId: string) => {
+    setAttendanceRecords((prev) => prev.filter((r) => r.id !== recordId));
+    showNotification('🗑️ تم حذف الحركة من السجلات بنجاح.');
   };
 
   // 4. Update Worker
@@ -452,6 +464,18 @@ export default function App() {
   const handleAddGatePass = (gatePass: GatePass) => {
     setGatePasses((prev) => [gatePass, ...prev]);
     showNotification(`تم إصدار تصريح الخروج للعامل ${gatePass.workerName} بتاريخ ${gatePass.date}.`);
+  };
+
+  const handleUpdateGatePass = (updatedGatePass: GatePass) => {
+    setGatePasses((prev) =>
+      prev.map((p) => (p.id === updatedGatePass.id ? updatedGatePass : p))
+    );
+    showNotification(`✅ تم تحديث تصريح الخروج للعامل (${updatedGatePass.workerName}) بنجاح.`);
+  };
+
+  const handleDeleteGatePass = (id: string) => {
+    setGatePasses((prev) => prev.filter((p) => p.id !== id));
+    showNotification('🗑️ تم حذف التصريح من السجلات بنجاح.');
   };
 
   // 9. Complete Gate Pass
@@ -534,7 +558,8 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '2.6.0',
+      version: '1.0.0',
+      developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
       workers,
@@ -623,7 +648,8 @@ export default function App() {
                 devices={devices}
                 workers={workers}
                 attendanceRecords={attendanceRecords}
-                onNewLiveRecord={handleNewLiveRecord}
+                onSyncAll={handleSyncAllDevices}
+                isSyncing={isSyncing}
               />
             )}
 
@@ -646,17 +672,45 @@ export default function App() {
                     for (const nw of newWorkers) {
                       if (codeToIdx.has(nw.code)) {
                         const idx = codeToIdx.get(nw.code)!;
-                        // Update with real name from machine if available
-                        if (nw.name && !nw.name.startsWith('عامل كود #')) {
-                          updated[idx] = {
-                            ...updated[idx],
-                            name: nw.name,
-                            isNameSyncedToDevice: true,
-                            hasFingerprint: true,
-                          };
-                        }
+                        const existing = updated[idx];
+
+                        // Point 9: Auto-link worker to the machine pulled from
+                        const mergedDeviceIds = Array.from(
+                          new Set([...(existing.assignedDeviceIds || []), ...(nw.assignedDeviceIds || [])])
+                        );
+
+                        // Point 8: Protect existing known name, only update if new name is a real valid non-placeholder name
+                        const hasRealName = Boolean(
+                          nw.name && 
+                          !nw.name.startsWith('عامل كود #') && 
+                          !nw.name.startsWith('عامل كود') &&
+                          nw.name.trim().length > 1
+                        );
+                        const finalName = hasRealName ? nw.name.trim() : existing.name;
+
+                        // Point 7: Bengali workers auto-detection (Latin/English characters)
+                        const isEnglishName = /^[A-Za-z\s.'-]+$/.test(finalName) && finalName.length > 2;
+
+                        updated[idx] = {
+                          ...existing,
+                          name: finalName,
+                          assignedDeviceIds: mergedDeviceIds,
+                          enrolledOnDeviceName: nw.enrolledOnDeviceName || existing.enrolledOnDeviceName,
+                          nationality: isEnglishName ? 'بنغلاديشي' : (existing.nationality || 'مصري'),
+                          shiftId: isEnglishName ? 'bangladeshi' : (existing.shiftId || 'standard'),
+                          isNameSyncedToDevice: true,
+                          hasFingerprint: true,
+                        };
                       } else {
-                        trulyNew.push(nw);
+                        // Brand new worker from machine
+                        const isEnglishName = /^[A-Za-z\s.'-]+$/.test(nw.name) && nw.name.length > 2;
+                        trulyNew.push({
+                          ...nw,
+                          nationality: isEnglishName ? 'بنغلاديشي' : (nw.nationality || 'مصري'),
+                          shiftId: isEnglishName ? 'bangladeshi' : (nw.shiftId || 'standard'),
+                          assignedDeviceIds: nw.assignedDeviceIds || [],
+                          enrolledOnDeviceName: nw.enrolledOnDeviceName,
+                        });
                       }
                     }
                     return [...trulyNew, ...updated];
@@ -673,6 +727,8 @@ export default function App() {
                 workers={workers}
                 devices={devices}
                 onAddManualRecord={handleAddManualRecord}
+                onUpdateRecord={handleUpdateRecord}
+                onDeleteRecord={handleDeleteRecord}
               />
             )}
 
@@ -700,6 +756,8 @@ export default function App() {
                 workers={workers}
                 onAddGatePass={handleAddGatePass}
                 onCompleteGatePass={handleCompleteGatePass}
+                onUpdateGatePass={handleUpdateGatePass}
+                onDeleteGatePass={handleDeleteGatePass}
               />
             )}
 
@@ -709,6 +767,9 @@ export default function App() {
                 attendanceRecords={attendanceRecords}
                 shifts={shifts}
                 gatePasses={gatePasses}
+                devices={devices}
+                onSyncDevices={handleSyncAllDevices}
+                isSyncing={isSyncing}
               />
             )}
 

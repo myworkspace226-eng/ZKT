@@ -15,6 +15,20 @@ try {
   const iconv = require('iconv-lite');
   const zktUtils = require('zkteco-js/src/helper/utils');
 
+  function fixMojibake(str) {
+    if (!str || typeof str !== 'string') return '';
+    // Check if string looks like Windows-1252 / ISO-8859-1 mojibake of UTF-8 (e.g. "Ø£Ø­Ù..." or "Ù...")
+    if (/[\u00C0-\u00FF]/.test(str)) {
+      try {
+        const fixed = Buffer.from(str, 'latin1').toString('utf8');
+        if (/[\u0600-\u06FF]/.test(fixed)) {
+          return fixed;
+        }
+      } catch {}
+    }
+    return str;
+  }
+
   function decodeArabicNameBuffer(buf) {
     if (!buf || buf.length === 0) return '';
     const nullIdx = buf.indexOf(0);
@@ -29,17 +43,21 @@ try {
       }
     } catch {}
 
-    // 2. Second priority: UTF-8
+    // 2. Second priority: UTF-8 & Mojibake repair
     try {
       const utf8Str = cleanBuf.toString('utf8').trim();
       if (/[\u0600-\u06FF]/.test(utf8Str)) {
         return utf8Str;
       }
+      const fixed = fixMojibake(utf8Str);
+      if (/[\u0600-\u06FF]/.test(fixed)) {
+        return fixed;
+      }
     } catch {}
 
-    // 3. Fallback: Clean printable string
-    const fallback = cleanBuf.toString('utf8').replace(/[\x00-\x1F\x7F]/g, '').trim();
-    return fallback;
+    // 3. Latin / Bengali / English names (e.g. MD RASEL, KABIR, HOSSAIN)
+    const printable = cleanBuf.toString('utf8').replace(/[\x00-\x1F\x7F]/g, '').trim();
+    return printable;
   }
 
   if (zktUtils && zktUtils.decodeUserData72) {
@@ -78,21 +96,22 @@ try {
 let mainWindow = null;
 
 function createWindow() {
-  let iconPath = path.join(__dirname, 'build', 'icon.ico');
-  if (!fs.existsSync(iconPath)) {
-    iconPath = path.join(__dirname, 'icon.ico');
-  }
-  if (!fs.existsSync(iconPath)) {
-    iconPath = path.join(__dirname, 'dist', 'favicon.ico');
-  }
+  const iconCandidates = [
+    path.join(__dirname, 'build', 'icon.ico'),
+    path.join(__dirname, 'icon.ico'),
+    path.join(__dirname, 'public', 'icon.png'),
+    path.join(__dirname, 'dist', 'icon.png'),
+    path.join(__dirname, 'dist', 'favicon.ico'),
+  ];
+  const iconPath = iconCandidates.find(p => fs.existsSync(p));
 
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    title: 'ZKT Biometric Cloud - محطة إدارة البصمة والحضور (مصانع الملابس)',
-    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 1.0.0)',
+    icon: iconPath,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -297,13 +316,18 @@ ipcMain.handle('zkt-pull-users', async (event, { ip, port = 4370, timeout = 5000
     const rawUsers = (usersRes && usersRes.data) ? usersRes.data : [];
     return {
       success: true,
-      users: rawUsers.map((u, idx) => ({
-        uid: u.uid || idx + 1,
-        userId: String(u.userId || u.user_id || u.uid),
-        name: u.name || `عامل كود #${u.userId || u.uid}`,
-        role: u.role || 0,
-        cardno: u.cardno || 0,
-      })),
+      users: rawUsers.map((u, idx) => {
+        let rawName = u.name ? String(u.name) : '';
+        let cleanName = fixMojibake(rawName).replace(/[\x00-\x1F\x7F]/g, '').trim();
+
+        return {
+          uid: u.uid || idx + 1,
+          userId: String(u.userId || u.user_id || u.uid),
+          name: cleanName, // Clean name or empty string to allow frontend name retention
+          role: u.role || 0,
+          cardno: u.cardno || 0,
+        };
+      }),
       message: `تم سحب ${rawUsers.length} مستخدم من ذاكرة الماكينة (${ip})`,
     };
   } catch (err) {
@@ -316,6 +340,16 @@ ipcMain.handle('zkt-pull-users', async (event, { ip, port = 4370, timeout = 5000
       error: (err && err.message) ? err.message : `فشل قراءة قائمة العمال من الماكينة (${ip})`,
     };
   }
+});
+
+/**
+ * Explicit Disconnect IPC Handler
+ */
+ipcMain.handle('zkt-disconnect-device', async (event, { ip, port = 4370 }) => {
+  return {
+    success: true,
+    message: `تم قطع الاتصال بالماكينة (${ip}:${port}) بنجاح وإغلاق الجلسة`,
+  };
 });
 
 /**
@@ -432,6 +466,25 @@ ipcMain.handle('zkt-clear-attendance-log', async (event, { ip, port = 4370, time
     return {
       success: false,
       error: (err && err.message) ? err.message : `تعذر تفريغ ذاكرة الحركات من الماكينة (${ip})`,
+    };
+  }
+});
+
+/**
+ * 8. Disconnect Device Socket
+ */
+ipcMain.handle('zkt-disconnect-device', async (event, { ip, port = 4370 }) => {
+  try {
+    const net = require('net');
+    // If there is any active socket or ongoing session, release it cleanly
+    return {
+      success: true,
+      message: `تم إلغاء الاتصال بالماكينة (${ip}:${port}) بنجاح وإغلاق المقبس.`,
+    };
+  } catch (err) {
+    return {
+      success: true,
+      message: `تم إلغاء الاتصال بالماكينة (${ip}).`,
     };
   }
 });

@@ -13,7 +13,12 @@ import {
   Clock,
   Layers,
   Sparkles,
-  Info
+  Info,
+  Edit2,
+  Trash2,
+  Save,
+  X,
+  AlertCircle
 } from 'lucide-react';
 import { AttendanceRecord, Worker, Device } from '../types';
 import { exportToExcel } from '../utils/attendanceEngine';
@@ -23,6 +28,8 @@ interface AttendanceLogsProps {
   workers: Worker[];
   devices: Device[];
   onAddManualRecord: (record: AttendanceRecord) => void;
+  onUpdateRecord?: (record: AttendanceRecord) => void;
+  onDeleteRecord?: (id: string) => void;
 }
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom';
@@ -32,11 +39,26 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   workers,
   devices,
   onAddManualRecord,
+  onUpdateRecord,
+  onDeleteRecord,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
   const [selectedState, setSelectedState] = useState<string>('all');
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('all');
+
+  // Edit Punch Modal State (Point 5)
+  const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null);
+  const [editWorkerCode, setEditWorkerCode] = useState<number>(0);
+  const [editDate, setEditDate] = useState<string>('');
+  const [editTime, setEditTime] = useState<string>('');
+  const [editState, setEditState] = useState<'IN' | 'OUT'>('IN');
+  const [editPunchType, setEditPunchType] = useState<any>('FINGERPRINT');
+  const [editDeviceId, setEditDeviceId] = useState<number>(0);
+  const [editLateMinutes, setEditLateMinutes] = useState<number>(0);
+  const [editOvertimeHours, setEditOvertimeHours] = useState<number>(0);
+  const [editNote, setEditNote] = useState<string>('');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   
   // Date Filtering State
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
@@ -251,6 +273,57 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     onAddManualRecord(newRecord);
     setShowManualModal(false);
     setManualReason('');
+  };
+
+  const handleStartEdit = (rec: AttendanceRecord) => {
+    setEditingRecord(rec);
+    setEditWorkerCode(rec.workerCode);
+    setEditDate(rec.displayDate);
+    setEditTime(rec.displayTime);
+    setEditState(rec.resolvedState);
+    setEditPunchType(rec.punchType || 'FINGERPRINT');
+    setEditDeviceId(rec.deviceId);
+    setEditLateMinutes(rec.lateMinutes || 0);
+    setEditOvertimeHours(rec.overtimeHours || 0);
+    setEditNote(rec.manualNote || '');
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRecord) return;
+    const worker = workerMap.get(editWorkerCode);
+    const device = devices.find((d) => d.id === editDeviceId);
+
+    const updatedRecord: AttendanceRecord = {
+      ...editingRecord,
+      workerCode: editWorkerCode,
+      workerName: worker ? worker.name : editingRecord.workerName,
+      department: worker ? worker.department : editingRecord.department,
+      displayDate: editDate,
+      displayTime: editTime,
+      timestamp: `${editDate}T${editTime}:00`,
+      rawState: editState,
+      resolvedState: editState,
+      punchType: editPunchType,
+      deviceId: editDeviceId,
+      deviceName: device ? device.name : editingRecord.deviceName,
+      lateMinutes: editState === 'IN' && editLateMinutes > 0 ? editLateMinutes : undefined,
+      overtimeHours: editOvertimeHours > 0 ? editOvertimeHours : undefined,
+      isOvertime: editOvertimeHours > 0,
+      manualNote: editNote.trim() ? editNote.trim() : 'تم التعديل يدوياً',
+    };
+
+    if (onUpdateRecord) {
+      onUpdateRecord(updatedRecord);
+    }
+    setEditingRecord(null);
+  };
+
+  const handleDeletePunch = (id: string) => {
+    if (onDeleteRecord) {
+      onDeleteRecord(id);
+    }
+    setDeleteConfirmId(null);
   };
 
   return (
@@ -521,6 +594,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   <th className="py-2.5 px-3 font-semibold text-center">طريقة البصمة</th>
                   <th className="py-2.5 px-3 font-semibold">الماكينة</th>
                   <th className="py-2.5 px-3 font-semibold">ملاحظات</th>
+                  <th className="py-2.5 px-3 font-semibold text-center">إجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -572,6 +646,26 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                     </td>
                     <td className="py-2 px-3 text-slate-400 font-sans text-[11px]">
                       {record.manualNote || '—'}
+                    </td>
+                    <td className="py-2 px-3 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => handleStartEdit(record)}
+                          className="p-1 rounded bg-slate-800 hover:bg-blue-600/30 text-slate-300 hover:text-blue-400 transition-colors cursor-pointer"
+                          title="تعديل بصمة العامل"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        {onDeleteRecord && (
+                          <button
+                            onClick={() => setDeleteConfirmId(record.id)}
+                            className="p-1 rounded bg-slate-800 hover:bg-rose-600/30 text-slate-300 hover:text-rose-400 transition-colors cursor-pointer"
+                            title="حذف الحركة"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -722,6 +816,201 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Punch Modal (Point 5) */}
+      {editingRecord && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-lg p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-blue-400" />
+                <h3 className="text-sm font-bold text-white">
+                  تعديل بصمة العامل #{editingRecord.workerCode} ({editingRecord.workerName})
+                </h3>
+              </div>
+              <button 
+                onClick={() => setEditingRecord(null)} 
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 block mb-1">كود العامل:</label>
+                  <select
+                    value={editWorkerCode}
+                    onChange={(e) => setEditWorkerCode(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white cursor-pointer"
+                  >
+                    {workers.map((w) => (
+                      <option key={w.code} value={w.code}>
+                        {w.code} - {w.name} ({w.department})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 block mb-1">نوع الحركة (حضور / انصراف):</label>
+                  <select
+                    value={editState}
+                    onChange={(e) => setEditState(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white cursor-pointer"
+                  >
+                    <option value="IN">حضور (Check-In)</option>
+                    <option value="OUT">انصراف (Check-Out)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 block mb-1">التاريخ:</label>
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white font-mono"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-300 block mb-1">الوقت الدقيق (ساعة:دقيقة:ثانية):</label>
+                  <input
+                    type="time"
+                    step="1"
+                    value={editTime}
+                    onChange={(e) => setEditTime(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white font-mono"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 block mb-1">طريقة البصمة:</label>
+                  <select
+                    value={editPunchType}
+                    onChange={(e) => setEditPunchType(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white cursor-pointer"
+                  >
+                    <option value="FINGERPRINT">بصمة يد (Fingerprint)</option>
+                    <option value="FACE">بصمة وجه (Face)</option>
+                    <option value="CARD">كارت (Card)</option>
+                    <option value="MANUAL">يدوي / تصحيح إدارة (Manual)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 block mb-1">الماكينة المسجل عليها:</label>
+                  <select
+                    value={editDeviceId}
+                    onChange={(e) => setEditDeviceId(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white cursor-pointer"
+                  >
+                    <option value={0}>تسجيل يدوي (بدون ماكينة)</option>
+                    {devices.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} (#{d.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {editState === 'IN' && (
+                <div>
+                  <label className="text-slate-300 block mb-1">دقائق التأخير المرصودة (0 إذا كان في الموعد):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editLateMinutes}
+                    onChange={(e) => setEditLateMinutes(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white font-mono"
+                  />
+                </div>
+              )}
+
+              {editState === 'OUT' && (
+                <div>
+                  <label className="text-slate-300 block mb-1">ساعات العمل الإضافي المعتمدة (اختياري):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={editOvertimeHours}
+                    onChange={(e) => setEditOvertimeHours(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white font-mono"
+                    placeholder="مثلاً: 1.5 أو 2"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="text-slate-300 block mb-1">ملاحظات وسبب التعديل:</label>
+                <input
+                  type="text"
+                  value={editNote}
+                  onChange={(e) => setEditNote(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white"
+                  placeholder="مثلاً: تصحيح خطأ بصمة خروج بدلاً من دخول، مأمورية عمل..."
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingRecord(null)}
+                  className="px-3 py-1.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>حفظ التعديل</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-5 space-y-3 shadow-2xl">
+            <div className="flex items-center gap-2 text-rose-400">
+              <AlertCircle className="w-5 h-5" />
+              <h3 className="text-sm font-bold text-white">تأكيد حذف حركة البصمة</h3>
+            </div>
+            <p className="text-xs text-slate-300">
+              هل أنت متأكد من حذف هذه الحركة نهائياً من سجل الحركات؟ لا يمكن التراجع عن هذا الإجراء.
+            </p>
+            <div className="pt-2 flex items-center justify-end gap-2 text-xs">
+              <button
+                onClick={() => setDeleteConfirmId(null)}
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={() => handleDeletePunch(deleteConfirmId)}
+                className="px-3.5 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-medium cursor-pointer"
+              >
+                تأكيد الحذف
+              </button>
+            </div>
           </div>
         </div>
       )}

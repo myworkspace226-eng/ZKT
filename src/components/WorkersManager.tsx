@@ -17,7 +17,12 @@ import {
   X,
   Radio,
   Tag,
-  Upload
+  Upload,
+  Edit3,
+  Save,
+  Sparkles,
+  Clock,
+  Check
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Worker, Device } from '../types';
@@ -48,6 +53,20 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   const [transferringWorker, setTransferringWorker] = useState<Worker | null>(null);
   const [newDepartment, setNewDepartment] = useState<string>('تعبئة وتغليف');
   const [newLine, setNewLine] = useState<string>('');
+
+  // Edit Worker Modal State (Point 6)
+  const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
+  const [editWorkerName, setEditWorkerName] = useState<string>('');
+  const [editWorkerCode, setEditWorkerCode] = useState<number>(0);
+  const [editWorkerDept, setEditWorkerDept] = useState<string>('');
+  const [editWorkerLine, setEditWorkerLine] = useState<string>('');
+  const [editWorkerJob, setEditWorkerJob] = useState<string>('');
+  const [editWorkerNat, setEditWorkerNat] = useState<'مصري' | 'بنغلاديشي' | 'أخرى'>('مصري');
+  const [editWorkerShift, setEditWorkerShift] = useState<'standard' | 'bangladeshi' | 'custom'>('standard');
+  const [editWorkerGrace, setEditWorkerGrace] = useState<number>(0);
+  const [editWorkerPhone, setEditWorkerPhone] = useState<string>('');
+  const [editWorkerAssignedDevices, setEditWorkerAssignedDevices] = useState<number[]>([]);
+  const [uploadToDeviceAfterSave, setUploadToDeviceAfterSave] = useState<boolean>(true);
 
   // Add Worker Modal
   const [showAddWorkerModal, setShowAddWorkerModal] = useState<boolean>(false);
@@ -137,6 +156,84 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     setTransferringWorker(null);
   };
 
+  // Open Full Worker Edit Modal (Point 6)
+  const handleOpenEditWorker = (w: Worker) => {
+    setEditingWorker(w);
+    setEditWorkerName(w.name);
+    setEditWorkerCode(w.code);
+    setEditWorkerDept(w.department);
+    setEditWorkerLine(w.line === '-' ? '' : w.line);
+    setEditWorkerJob(w.jobTitle);
+    setEditWorkerNat(w.nationality || 'مصري');
+    setEditWorkerShift(w.shiftId || 'standard');
+    setEditWorkerGrace(w.customGraceMinutes || 0);
+    setEditWorkerPhone(w.phone || '');
+    setEditWorkerAssignedDevices(w.assignedDeviceIds || []);
+    setUploadToDeviceAfterSave(true);
+  };
+
+  const handleSaveWorkerEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingWorker || !editWorkerName.trim()) return;
+
+    const isEnglishName = /^[A-Za-z\s.'-]+$/.test(editWorkerName.trim()) && editWorkerName.trim().length > 2;
+    const finalNat = editWorkerNat === 'مصري' && isEnglishName ? 'بنغلاديشي' : editWorkerNat;
+    const finalShift = editWorkerShift === 'standard' && isEnglishName ? 'bangladeshi' : editWorkerShift;
+    const primaryDevice = devices.find(d => editWorkerAssignedDevices.includes(d.id));
+
+    const updated: Worker = {
+      ...editingWorker,
+      name: editWorkerName.trim(),
+      code: editWorkerCode,
+      department: editWorkerDept.trim(),
+      line: editWorkerLine.trim() || '-',
+      jobTitle: editWorkerJob.trim(),
+      nationality: finalNat,
+      shiftId: finalShift,
+      customGraceMinutes: editWorkerGrace,
+      phone: editWorkerPhone.trim(),
+      assignedDeviceIds: editWorkerAssignedDevices,
+      enrolledOnDeviceName: primaryDevice ? primaryDevice.name : editingWorker.enrolledOnDeviceName,
+      isNameSyncedToDevice: uploadToDeviceAfterSave ? true : editingWorker.isNameSyncedToDevice,
+    };
+
+    onUpdateWorker(updated);
+
+    if (uploadToDeviceAfterSave && editWorkerAssignedDevices.length > 0) {
+      handleQuickUploadWorkerName(updated);
+    } else {
+      setNotification(`✅ تم حفظ وتحديث بيانات العامل (${updated.name}) بنجاح.`);
+      setTimeout(() => setNotification(null), 5000);
+    }
+
+    setEditingWorker(null);
+  };
+
+  // Auto-Fix Bangladeshi Shifts (Point 7)
+  const handleAutoFixBangladeshiShifts = () => {
+    let fixCount = 0;
+    workers.forEach((w) => {
+      const isEnglish = /^[A-Za-z\s.'-]+$/.test(w.name) && w.name.length > 2;
+      const isBangladeshi = w.nationality === 'بنغلاديشي' || isEnglish;
+      
+      if (isBangladeshi && (w.shiftId !== 'bangladeshi' || w.nationality !== 'بنغلاديشي')) {
+        onUpdateWorker({
+          ...w,
+          nationality: 'بنغلاديشي',
+          shiftId: 'bangladeshi',
+        });
+        fixCount++;
+      }
+    });
+
+    if (fixCount > 0) {
+      setNotification(`✅ تم فحص السجلات وتصحيح ورديات (${fixCount}) عامل بنغالي إلى وردية بنغال (8:00 - 18:30) بنجاح.`);
+    } else {
+      setNotification(`ℹ️ جميع العمال البنغال مضبوطون بالفعل على وردية بنغال (8:00 - 18:30).`);
+    }
+    setTimeout(() => setNotification(null), 6000);
+  };
+
   // Quick 1-click single worker upload to machines
   const handleQuickUploadWorkerName = (worker: Worker) => {
     onUpdateWorker({
@@ -152,6 +249,11 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     e.preventDefault();
     if (!newWorkerName.trim()) return;
 
+    // Point 7: Detect English name for Bengali workers automatically
+    const isEnglishName = /^[A-Za-z\s.'-]+$/.test(newWorkerName.trim()) && newWorkerName.trim().length > 2;
+    const finalNat = newWorkerNat === 'مصري' && isEnglishName ? 'بنغلاديشي' : newWorkerNat;
+    const finalShift = newWorkerShift === 'standard' && isEnglishName ? 'bangladeshi' : newWorkerShift;
+
     const newWorker: Worker = {
       id: `w-${newWorkerCode}`,
       code: newWorkerCode,
@@ -159,8 +261,8 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
       department: newWorkerDept.trim(),
       line: newWorkerLine.trim() || '-',
       jobTitle: newWorkerJob.trim(),
-      nationality: newWorkerNat,
-      shiftId: newWorkerShift,
+      nationality: finalNat,
+      shiftId: finalShift,
       customGraceMinutes: newWorkerGrace,
       isActive: true,
       hasFingerprint: true,
@@ -393,6 +495,16 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
             )}
           </button>
 
+          {/* Point 7: Auto-Fix Bangladeshi Shifts */}
+          <button
+            onClick={handleAutoFixBangladeshiShifts}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 text-xs font-medium border border-amber-500/30 transition-colors cursor-pointer"
+            title="فحص العمال وضبط وردية بنغال (8:00 - 18:30) تلقائياً لأصحاب الأسماء الإنجليزية والجنسية البنغالية"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>ضبط ورديات البنغال تلقائياً</span>
+          </button>
+
           <button
             onClick={() => setShowAddWorkerModal(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors cursor-pointer"
@@ -525,7 +637,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                   <th className="py-2.5 px-3 font-semibold">خط الإنتاج</th>
                   <th className="py-2.5 px-3 font-semibold">الوظيفة</th>
                   <th className="py-2.5 px-3 font-semibold">الجنسية والوردية</th>
-                  <th className="py-2.5 px-3 font-semibold text-center">حالة الربط بالماكينة</th>
+                  <th className="py-2.5 px-3 font-semibold text-center">الماكينة والربط</th>
                   <th className="py-2.5 px-3 font-semibold text-center">الحالة</th>
                   <th className="py-2.5 px-3 font-semibold text-center">إجراءات</th>
                 </tr>
@@ -544,21 +656,37 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                       {worker.nationality} ({worker.shiftId === 'bangladeshi' ? '8:00 - 18:30' : '8:00 - 16:30'})
                     </td>
                     <td className="py-2 px-3 text-center">
-                      {worker.isNameSyncedToDevice ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>الاسم مربوط بالماكينة</span>
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => handleQuickUploadWorkerName(worker)}
-                          className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors cursor-pointer"
-                          title="اضغط لرفع الاسم وتثبيته على الماكينة"
-                        >
-                          <UploadCloud className="w-3 h-3" />
-                          <span>في انتظار الرفع (اضغط للرفع)</span>
-                        </button>
-                      )}
+                      <div className="flex flex-col items-center gap-1">
+                        {worker.enrolledOnDeviceName ? (
+                          <span className="text-[10px] text-cyan-300 font-mono bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800/40">
+                            {worker.enrolledOnDeviceName}
+                          </span>
+                        ) : worker.assignedDeviceIds && worker.assignedDeviceIds.length > 0 ? (
+                          <span className="text-[10px] text-cyan-300 font-mono bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800/40" title={`ماكينات: ${worker.assignedDeviceIds.join(', ')}`}>
+                            {worker.assignedDeviceIds.length === 1 
+                              ? (devices.find(d => d.id === worker.assignedDeviceIds[0])?.name || `ماكينة #${worker.assignedDeviceIds[0]}`)
+                              : `${worker.assignedDeviceIds.length} ماكينات`}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-500">غير محدد</span>
+                        )}
+
+                        {worker.isNameSyncedToDevice ? (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            <CheckCircle2 className="w-2.5 h-2.5" />
+                            <span>مربوط</span>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleQuickUploadWorkerName(worker)}
+                            className="inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.2 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors cursor-pointer"
+                            title="اضغط لرفع الاسم وتثبيته على الماكينة"
+                          >
+                            <UploadCloud className="w-2.5 h-2.5" />
+                            <span>رفع الاسم</span>
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2 px-3 text-center">
                       <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${
@@ -571,6 +699,13 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                       <div className="flex items-center justify-center gap-1.5">
                         {worker.isActive ? (
                           <>
+                            <button
+                              onClick={() => handleOpenEditWorker(worker)}
+                              className="p-1 rounded bg-slate-800 hover:bg-blue-600/30 text-slate-300 hover:text-blue-400 transition-colors cursor-pointer"
+                              title="تعديل بيانات العامل بالكامل"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               onClick={() => {
                                 setTransferringWorker(worker);
@@ -1043,6 +1178,250 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Worker Modal (Point 6 & 7) */}
+      {editingWorker && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-5 space-y-4 shadow-2xl my-6">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-blue-400" />
+                <h3 className="text-sm font-bold text-white">
+                  تعديل بيانات العامل والموظف #{editingWorker.code} ({editingWorker.name})
+                </h3>
+              </div>
+              <button
+                onClick={() => setEditingWorker(null)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWorkerEdit} className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">الاسم بالكامل:</label>
+                  <input
+                    type="text"
+                    value={editWorkerName}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditWorkerName(val);
+                      // Auto-detect Bengali if typing English name
+                      if (/^[A-Za-z\s.'-]+$/.test(val) && val.length > 2) {
+                        setEditWorkerNat('بنغلاديشي');
+                        setEditWorkerShift('bangladeshi');
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500"
+                    placeholder="مثال: أحمد محمد عبد الله أو MD RASEL"
+                    required
+                  />
+                  {/^[A-Za-z\s.'-]+$/.test(editWorkerName) && editWorkerName.length > 2 && (
+                    <span className="text-[10px] text-amber-400 mt-0.5 block">
+                      ⚡ تم التعرف على اسم باللغة الإنجليزية: تم ضبط الجنسية تلقائياً بنغلاديشي ووردية بنغال.
+                    </span>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">كود العامل (ID):</label>
+                  <input
+                    type="number"
+                    value={editWorkerCode}
+                    onChange={(e) => setEditWorkerCode(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">القسم:</label>
+                  <input
+                    type="text"
+                    value={editWorkerDept}
+                    onChange={(e) => setEditWorkerDept(e.target.value)}
+                    list="factory-depts-list"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500"
+                    placeholder="اختر أو اكتب القسم"
+                    required
+                  />
+                  <datalist id="factory-depts-list">
+                    <option value="إنتاج رجال" />
+                    <option value="إنتاج سيدات" />
+                    <option value="تعبئة وتغليف" />
+                    <option value="مراقبة الجودة" />
+                    <option value="صيانة وتشغيل" />
+                    <option value="المخازن" />
+                    <option value="الشؤون الإدارية" />
+                  </datalist>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">خط الإنتاج:</label>
+                  <input
+                    type="text"
+                    value={editWorkerLine}
+                    onChange={(e) => setEditWorkerLine(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500"
+                    placeholder="مثال: خط 1، خط 2 أو -"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">المسمى الوظيفي:</label>
+                  <input
+                    type="text"
+                    value={editWorkerJob}
+                    onChange={(e) => setEditWorkerJob(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500"
+                    placeholder="مثال: فني خياطة، مساعد، مراقب"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">الجنسية:</label>
+                  <select
+                    value={editWorkerNat}
+                    onChange={(e) => {
+                      const nat = e.target.value as any;
+                      setEditWorkerNat(nat);
+                      if (nat === 'بنغلاديشي') {
+                        setEditWorkerShift('bangladeshi');
+                      } else {
+                        setEditWorkerShift('standard');
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500 cursor-pointer"
+                  >
+                    <option value="مصري">مصري</option>
+                    <option value="بنغلاديشي">بنغلاديشي</option>
+                    <option value="أخرى">أخرى</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">الوردية ومواعيد العمل:</label>
+                  <select
+                    value={editWorkerShift}
+                    onChange={(e) => setEditWorkerShift(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500 cursor-pointer font-sans"
+                  >
+                    <option value="standard">وردية مصريين (8:00 ص - 4:30 م)</option>
+                    <option value="bangladeshi">وردية بنغال (8:00 ص - 6:30 م)</option>
+                    <option value="custom">وردية مخصصة</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">سماحية تأخير مخصصة (دقيقة):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={editWorkerGrace}
+                    onChange={(e) => setEditWorkerGrace(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+
+              {/* Point 9: Assigned Machines Checklist */}
+              <div className="space-y-1.5 bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-200 font-medium block">
+                    الماكينات المسجل عليها العامل بالمصنع ({devices.length} ماكينات):
+                  </label>
+                  <span className="text-[10px] text-cyan-400 font-mono">
+                    {editWorkerAssignedDevices.length} ماكينات محددة
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {devices.map((d) => {
+                    const isChecked = editWorkerAssignedDevices.includes(d.id);
+                    return (
+                      <label
+                        key={d.id}
+                        className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-colors ${
+                          isChecked 
+                            ? 'bg-blue-950/40 border-blue-500/50 text-white' 
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setEditWorkerAssignedDevices(prev => [...prev, d.id]);
+                              } else {
+                                setEditWorkerAssignedDevices(prev => prev.filter(id => id !== d.id));
+                              }
+                            }}
+                            className="w-3.5 h-3.5 text-blue-600 rounded bg-slate-950 border-slate-700"
+                          />
+                          <span className="font-sans text-xs">{d.name}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono">#{d.id}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 font-medium block mb-1">رقم الهاتف (اختياري):</label>
+                  <input
+                    type="text"
+                    value={editWorkerPhone}
+                    onChange={(e) => setEditWorkerPhone(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
+                    placeholder="مثال: 010xxxxxxxx"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-5">
+                  <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={uploadToDeviceAfterSave}
+                      onChange={(e) => setUploadToDeviceAfterSave(e.target.checked)}
+                      className="w-4 h-4 text-emerald-600 rounded bg-slate-950 border-slate-700"
+                    />
+                    <span className="text-xs">رفع وتحديث الاسم على شاشة الماكينة فور الحفظ</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingWorker(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>حفظ وتثبيت التعديلات</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

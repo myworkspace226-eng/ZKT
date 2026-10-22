@@ -1,8 +1,8 @@
 {
   "name": "zkt-biometric-attendance",
-  "productName": "ZKT Biometric Pro",
-  "description": "Professional ZKTeco Biometric Attendance Management System for Windows",
-  "author": "ZKT Systems",
+  "productName": "نظام إدارة البصمة - Muhammad Abdullah",
+  "description": "نظام إدارة ماكينات البصمة ZKTeco - المطور: Muhammad Abdullah",
+  "author": "Muhammad Abdullah",
   "private": true,
   "version": "1.0.0",
   "main": "electron-main.cjs",

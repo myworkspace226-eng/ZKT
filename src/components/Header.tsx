@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { isDesktopApp, checkNetworkConnectivity } from '../services/deviceConnection';
+import appIcon from '../assets/app-icon.png';
 import { 
   Clock, 
   Wifi, 
   WifiOff,
   RefreshCw, 
   Monitor,
-  Globe
+  Globe,
+  Fingerprint
 } from 'lucide-react';
 import { Device } from '../types';
 
@@ -83,15 +85,24 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center justify-between px-4 py-2.5">
         {/* Brand & App Info */}
         <div className="flex items-center gap-3 shrink-0">
-          <img 
-            src="/icon.png" 
-            alt="ZKT Pro Icon" 
-            className="w-8 h-8 rounded-lg shadow-md border border-cyan-500/30 object-cover" 
-          />
+          <div className="relative w-8 h-8 rounded-lg overflow-hidden border border-cyan-500/40 shadow-md bg-slate-800 flex items-center justify-center">
+            <img 
+              src={appIcon} 
+              alt="نظام إدارة البصمة" 
+              onError={(e) => {
+                // Fallback to relative or hide broken img
+                (e.currentTarget as HTMLImageElement).src = './icon.png';
+              }}
+              className="w-full h-full object-cover" 
+            />
+          </div>
           <div>
             <div className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
               <span>نظام إدارة البصمة</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-mono">PRO</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-mono">V 1.0.0</span>
+            </div>
+            <div className="text-[10px] text-slate-400">
+              المطور: <span className="text-cyan-300 font-medium">Muhammad Abdullah</span>
             </div>
           </div>
         </div>
