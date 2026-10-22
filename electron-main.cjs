@@ -159,11 +159,21 @@ app.on('window-all-closed', () => {
 // -------------------------------------------------------------
 
 /**
+ * Safe IPC Handler registration helper to prevent "Attempted to register a second handler" error
+ */
+function safeHandle(channel, handler) {
+  try {
+    ipcMain.removeHandler(channel);
+  } catch (e) {}
+  ipcMain.handle(channel, handler);
+}
+
+/**
  * 1. Ping / Test Device Reachability
  * Accurately detects whether device port 4370 is open or ICMP responds.
  * Strictly avoids false positives caused by local gateway / host unreachable replies.
  */
-ipcMain.handle('zkt-ping-device', async (event, { ip, port = 4370, timeout = 2500 }) => {
+safeHandle('zkt-ping-device', async (event, { ip, port = 4370, timeout = 2500 }) => {
   return new Promise((resolve) => {
     const startTime = Date.now();
     let isResolved = false;
@@ -238,7 +248,7 @@ ipcMain.handle('zkt-ping-device', async (event, { ip, port = 4370, timeout = 250
  * 2. Pull Real Attendance Logs from ZKTeco Device
  * Connects directly using binary protocol on port 4370 (TCP/UDP)
  */
-ipcMain.handle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) => {
+safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) => {
   let zk = null;
   const startTime = Date.now();
   try {
@@ -301,7 +311,7 @@ ipcMain.handle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 
 /**
  * 3. Pull Registered Users / Workers from Device
  */
-ipcMain.handle('zkt-pull-users', async (event, { ip, port = 4370, timeout = 5000 }) => {
+safeHandle('zkt-pull-users', async (event, { ip, port = 4370, timeout = 5000 }) => {
   let zk = null;
   try {
     const Zkteco = require('zkteco-js');
@@ -343,19 +353,9 @@ ipcMain.handle('zkt-pull-users', async (event, { ip, port = 4370, timeout = 5000
 });
 
 /**
- * Explicit Disconnect IPC Handler
- */
-ipcMain.handle('zkt-disconnect-device', async (event, { ip, port = 4370 }) => {
-  return {
-    success: true,
-    message: `تم قطع الاتصال بالماكينة (${ip}:${port}) بنجاح وإغلاق الجلسة`,
-  };
-});
-
-/**
  * 4. Upload Worker / User to Device
  */
-ipcMain.handle('zkt-upload-user', async (event, { ip, port = 4370, timeout = 5000, user }) => {
+safeHandle('zkt-upload-user', async (event, { ip, port = 4370, timeout = 5000, user }) => {
   let zk = null;
   try {
     const Zkteco = require('zkteco-js');
@@ -389,7 +389,7 @@ ipcMain.handle('zkt-upload-user', async (event, { ip, port = 4370, timeout = 500
 /**
  * 5. Synchronize Device Clock
  */
-ipcMain.handle('zkt-sync-time', async (event, { ip, port = 4370, timeout = 5000 }) => {
+safeHandle('zkt-sync-time', async (event, { ip, port = 4370, timeout = 5000 }) => {
   let zk = null;
   try {
     const Zkteco = require('zkteco-js');
@@ -417,7 +417,7 @@ ipcMain.handle('zkt-sync-time', async (event, { ip, port = 4370, timeout = 5000 
 /**
  * 6. Native Network Adapter Status
  */
-ipcMain.handle('zkt-check-network', async () => {
+safeHandle('zkt-check-network', async () => {
   try {
     const os = require('os');
     const ifaces = os.networkInterfaces();
@@ -445,7 +445,7 @@ ipcMain.handle('zkt-check-network', async () => {
  * Frees up device memory by removing historical punches (CMD_CLEAR_ATTLOG)
  * NEVER removes users, biometric templates, or credentials.
  */
-ipcMain.handle('zkt-clear-attendance-log', async (event, { ip, port = 4370, timeout = 8000 }) => {
+safeHandle('zkt-clear-attendance-log', async (event, { ip, port = 4370, timeout = 8000 }) => {
   let zk = null;
   try {
     const Zkteco = require('zkteco-js');
@@ -473,7 +473,7 @@ ipcMain.handle('zkt-clear-attendance-log', async (event, { ip, port = 4370, time
 /**
  * 8. Disconnect Device Socket
  */
-ipcMain.handle('zkt-disconnect-device', async (event, { ip, port = 4370 }) => {
+safeHandle('zkt-disconnect-device', async (event, { ip, port = 4370 }) => {
   try {
     const net = require('net');
     // If there is any active socket or ongoing session, release it cleanly
