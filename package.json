@@ -4,7 +4,7 @@
   "description": "نظام إدارة ماكينات البصمة ZKTeco - المطور: Muhammad Abdullah",
   "author": "Muhammad Abdullah",
   "private": true,
-  "version": "1.0.0",
+  "version": "3.0.6",
   "main": "electron-main.cjs",
   "type": "module",
   "scripts": {

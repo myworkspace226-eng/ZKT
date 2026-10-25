@@ -31,33 +31,60 @@ try {
 
   function decodeArabicNameBuffer(buf) {
     if (!buf || buf.length === 0) return '';
+
+    // 1. Check for UTF-16LE / UCS-2 (common on color-screen ZKTeco terminals)
+    try {
+      const utf16Str = iconv.decode(buf, 'utf16le').replace(/\0.*$/g, '').trim();
+      if (/[\u0600-\u06FF]/.test(utf16Str) || (utf16Str.length >= 2 && /^[A-Za-z0-9\s._'-]+$/.test(utf16Str))) {
+        return utf16Str;
+      }
+    } catch {}
+
+    // 2. Windows-1256 (standard 8-bit Arabic codepage for ZKTeco firmware)
     const nullIdx = buf.indexOf(0);
-    const cleanBuf = nullIdx !== -1 ? buf.subarray(0, nullIdx) : buf;
-    if (cleanBuf.length === 0) return '';
+    const clean8bit = nullIdx !== -1 ? buf.subarray(0, nullIdx) : buf;
+    if (clean8bit.length > 0) {
+      try {
+        const win1256Str = iconv.decode(clean8bit, 'win1256').replace(/\0/g, '').trim();
+        if (/[\u0600-\u06FF]/.test(win1256Str)) {
+          return win1256Str;
+        }
+      } catch {}
 
-    // 1. First priority: Windows-1256 (standard Arabic codepage for ZKTeco hardware)
-    try {
-      const win1256Str = iconv.decode(cleanBuf, 'win1256').trim();
-      if (/[\u0600-\u06FF]/.test(win1256Str)) {
-        return win1256Str;
-      }
-    } catch {}
+      // 3. UTF-8 & Mojibake repair
+      try {
+        const utf8Str = clean8bit.toString('utf8').replace(/\0/g, '').trim();
+        if (/[\u0600-\u06FF]/.test(utf8Str)) {
+          return utf8Str;
+        }
+        const fixed = fixMojibake(utf8Str);
+        if (/[\u0600-\u06FF]/.test(fixed)) {
+          return fixed;
+        }
+        if (utf8Str.length > 0 && !/[\x00-\x1F]/.test(utf8Str)) {
+          return utf8Str;
+        }
+      } catch {}
 
-    // 2. Second priority: UTF-8 & Mojibake repair
-    try {
-      const utf8Str = cleanBuf.toString('utf8').trim();
-      if (/[\u0600-\u06FF]/.test(utf8Str)) {
-        return utf8Str;
+      // 4. Latin / English / Bengali names (e.g. MD RASEL)
+      const printable = clean8bit.toString('utf8').replace(/[\x00-\x1F\x7F]/g, '').trim();
+      if (printable.length > 0) {
+        return printable;
       }
-      const fixed = fixMojibake(utf8Str);
-      if (/[\u0600-\u06FF]/.test(fixed)) {
-        return fixed;
-      }
-    } catch {}
+    }
 
-    // 3. Latin / Bengali / English names (e.g. MD RASEL, KABIR, HOSSAIN)
-    const printable = cleanBuf.toString('utf8').replace(/[\x00-\x1F\x7F]/g, '').trim();
-    return printable;
+    // 5. Fallback scan if initial bytes were zero
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] !== 0) {
+        try {
+          const str = iconv.decode(buf.subarray(i), 'win1256').replace(/\0.*$/g, '').trim();
+          if (str.length > 0) return str;
+        } catch {}
+        break;
+      }
+    }
+
+    return '';
   }
 
   if (zktUtils && zktUtils.decodeUserData72) {
@@ -110,7 +137,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 1.0.0)',
+    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 3.0.6)',
     icon: iconPath,
     webPreferences: {
       nodeIntegration: true,
@@ -279,15 +306,21 @@ safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) =
     return {
       success: true,
       pingMs,
-      records: rawRecords.map((r, idx) => ({
-        id: idx + 1,
-        sn: r.sn || idx + 1,
-        userId: String(r.user_id || r.userId || ''),
-        recordTime: r.record_time || new Date().toISOString(),
-        type: r.type || 0,
-        state: r.state || 0,
-        ip: ip,
-      })),
+      records: rawRecords.map((r, idx) => {
+        const vType = r.verify_type !== undefined ? r.verify_type : (r.verifyType !== undefined ? r.verifyType : (r.verification_type !== undefined ? r.verification_type : (r.state !== undefined ? r.state : 0)));
+        const vMode = r.verify_mode !== undefined ? r.verify_mode : (r.verifyMode !== undefined ? r.verifyMode : 0);
+        return {
+          id: idx + 1,
+          sn: r.sn || idx + 1,
+          userId: String(r.user_id || r.userId || ''),
+          recordTime: r.record_time || new Date().toISOString(),
+          type: r.type || 0,
+          state: r.state || 0,
+          verifyType: Number(vType) || 0,
+          verifyMode: Number(vMode) || 0,
+          ip: ip,
+        };
+      }),
       deviceInfo: info || null,
       message: `تم سحب ${rawRecords.length} حركة بنجاح من الماكينة (${ip})`,
     };

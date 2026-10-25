@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
-import { Sidebar, ActiveTab } from './components/Sidebar';
+import { Sidebar, ActiveTab, ActivityLogEntry } from './components/Sidebar';
 import { DashboardHUD } from './components/DashboardHUD';
 import { DeviceManager } from './components/DeviceManager';
 import { AttendanceLogs } from './components/AttendanceLogs';
@@ -127,8 +127,26 @@ export default function App() {
     }
   }, [settings]);
 
-  const showNotification = (msg: string) => {
+  const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([
+    { 
+      id: 'init-1', 
+      time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 3.0.6', 
+      type: 'info' 
+    }
+  ]);
+
+  const showNotification = (msg: string, type: 'success' | 'error' | 'info' = 'info') => {
     setGlobalNotice(msg);
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+        text: msg.replace(/[✅❌🔌ℹ️🗑️⚡]/g, '').trim(),
+        type: msg.includes('❌') ? 'error' : msg.includes('✅') ? 'success' : type,
+      },
+      ...prev.slice(0, 19),
+    ]);
     setTimeout(() => setGlobalNotice(null), 4000);
   };
 
@@ -241,7 +259,27 @@ export default function App() {
       if (res.success) {
         connectedCount++;
         const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
-          const matchedWorker = workers.find((w) => String(w.code) === String(r.userId));
+          const userCodeNum = Number(r.userId) || (1000 + i);
+          const userCodeClean = String(r.userId || '').trim().replace(/^0+/, '');
+          const matchedWorker = workers.find((w) => {
+            const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
+            return w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
+          });
+
+          const realWorkerName = matchedWorker 
+            ? matchedWorker.name 
+            : `موظف #${r.userId}`;
+
+          const vType = Number(r.verifyType) || 0;
+          let pType: 'FINGERPRINT' | 'FACE' | 'CARD' | 'MANUAL' = 'FINGERPRINT';
+          if (vType === 15 || vType === 4 || vType === 16 || (matchedWorker?.hasFace && !matchedWorker?.hasFingerprint)) {
+            pType = 'FACE';
+          } else if (vType === 2 || vType === 3) {
+            pType = 'CARD';
+          } else if (matchedWorker?.hasFace && !matchedWorker?.hasFingerprint) {
+            pType = 'FACE';
+          }
+
           const dateObj = new Date(r.recordTime);
           const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
           const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
@@ -249,8 +287,8 @@ export default function App() {
 
           return {
             id: `REC-${d.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
-            workerCode: Number(r.userId) || 1000 + i,
-            workerName: matchedWorker ? matchedWorker.name : `عامل كود #${r.userId}`,
+            workerCode: userCodeNum,
+            workerName: realWorkerName,
             department: matchedWorker ? matchedWorker.department : d.department,
             timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
             displayDate: dateStr,
@@ -259,7 +297,8 @@ export default function App() {
             resolvedState: punchState,
             deviceId: d.id,
             deviceName: d.name,
-            punchType: 'FINGERPRINT',
+            punchType: pType,
+            verifyType: vType,
           };
         });
 
@@ -338,7 +377,27 @@ export default function App() {
 
     if (res.success) {
       const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
-        const matchedWorker = workers.find((w) => String(w.code) === String(r.userId));
+        const userCodeNum = Number(r.userId) || (1000 + i);
+        const userCodeClean = String(r.userId || '').trim().replace(/^0+/, '');
+        const matchedWorker = workers.find((w) => {
+          const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
+          return w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
+        });
+
+        const realWorkerName = matchedWorker 
+          ? matchedWorker.name 
+          : `موظف #${r.userId}`;
+
+        const vType = Number(r.verifyType) || 0;
+        let pType: 'FINGERPRINT' | 'FACE' | 'CARD' | 'MANUAL' = 'FINGERPRINT';
+        if (vType === 15 || vType === 4 || vType === 16 || (matchedWorker?.hasFace && !matchedWorker?.hasFingerprint)) {
+          pType = 'FACE';
+        } else if (vType === 2 || vType === 3) {
+          pType = 'CARD';
+        } else if (matchedWorker?.hasFace && !matchedWorker?.hasFingerprint) {
+          pType = 'FACE';
+        }
+
         const dateObj = new Date(r.recordTime);
         const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
         const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
@@ -346,8 +405,8 @@ export default function App() {
 
         return {
           id: `REC-${target.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
-          workerCode: Number(r.userId) || 1000 + i,
-          workerName: matchedWorker ? matchedWorker.name : `عامل كود #${r.userId}`,
+          workerCode: userCodeNum,
+          workerName: realWorkerName,
           department: matchedWorker ? matchedWorker.department : target.department,
           timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
           displayDate: dateStr,
@@ -356,7 +415,8 @@ export default function App() {
           resolvedState: punchState,
           deviceId: target.id,
           deviceName: target.name,
-          punchType: 'FINGERPRINT',
+          punchType: pType,
+          verifyType: vType,
         };
       });
 
@@ -558,7 +618,7 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '1.0.0',
+      version: '3.0.6',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
@@ -604,7 +664,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white antialiased">
+    <div className="h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white antialiased">
       {/* Header */}
       <Header
         devices={devices}
@@ -612,16 +672,16 @@ export default function App() {
         isSyncing={isSyncing}
       />
 
-      {/* Global Notification */}
+      {/* Floating Global Notification (Zero Layout Shift - Floating Bottom-Right Corner) */}
       {globalNotice && (
-        <div className="bg-slate-800 border-b border-slate-700 text-slate-200 text-xs px-4 py-2 text-center font-medium flex items-center justify-center gap-2">
-          <span>{globalNotice}</span>
-          <button onClick={() => setGlobalNotice(null)} className="text-slate-400 hover:text-white mr-2 cursor-pointer">✕</button>
+        <div className="fixed bottom-6 right-6 z-50 pointer-events-auto bg-slate-900/95 backdrop-blur-md border border-cyan-500/50 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2 max-w-md">
+          <span className="font-medium leading-relaxed">{globalNotice}</span>
+          <button onClick={() => setGlobalNotice(null)} className="text-slate-400 hover:text-white cursor-pointer mr-1">✕</button>
         </div>
       )}
 
-      {/* Main Frame */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Main Frame (Fixed Sidebar on Right, Scrollable Content on Left) */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -629,9 +689,10 @@ export default function App() {
           devicesCount={devices.length}
           workersCount={workers.length}
           gatePassesCount={gatePasses.length}
+          activityLogs={activityLogs}
         />
 
-        <main className="flex-1 p-5 overflow-y-auto bg-slate-950">
+        <main className="flex-1 p-5 overflow-y-auto bg-slate-950 min-h-0">
           <div className="max-w-6xl mx-auto">
             {activeTab === 'dashboard' && (
               <DashboardHUD

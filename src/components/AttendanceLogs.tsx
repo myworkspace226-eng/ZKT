@@ -18,10 +18,13 @@ import {
   Trash2,
   Save,
   X,
-  AlertCircle
+  AlertCircle,
+  ScanFace,
+  CreditCard,
+  AlertTriangle
 } from 'lucide-react';
 import { AttendanceRecord, Worker, Device } from '../types';
-import { exportToExcel } from '../utils/attendanceEngine';
+import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
 
 interface AttendanceLogsProps {
   records: AttendanceRecord[];
@@ -90,68 +93,39 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     return map;
   }, [workers]);
 
-  // Dynamic duplicate detection and worker info enrichment
-  const { enrichedRecords, detectedDuplicatesCount } = useMemo(() => {
-    // Sort records chronologically (oldest to newest) to detect consecutive punches within the threshold window
-    const sorted = [...records].sort((a, b) => {
-      const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
-      const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
-      if (isNaN(tA) || isNaN(tB)) return (a.id || '').localeCompare(b.id || '');
-      return tA - tB;
-    });
-
-    const thresholdMs = duplicateThresholdMinutes * 60 * 1000;
+  // Smart Attendance Processing (1-hour cooldown deduplication, 1st & last punch, overnight shifts, missed punches)
+  const { smartRecords, detectedDuplicatesCount, missedPunchesCount } = useMemo(() => {
+    const processed = processSmartAttendanceLogs(records);
     let dupCount = 0;
-    // Map: workerCode -> { lastTime: number, lastState: string, lastDeviceId: number }
-    const lastPunchMap = new Map<number, { time: number; state: string; deviceId: number }>();
+    let missedCount = 0;
 
-    const processed = sorted.map((rec) => {
+    const enriched = processed.map((rec) => {
       const worker = workerMap.get(rec.workerCode);
-      const effectiveName = (worker && worker.name && !worker.name.startsWith('عامل كود #'))
+      const effectiveName = (worker && worker.name && !worker.name.startsWith('عامل كود #') && !worker.name.startsWith('عامل كود'))
         ? worker.name 
         : rec.workerName;
       const effectiveDept = worker?.department || rec.department;
 
-      const punchTime = new Date(`${rec.displayDate}T${rec.displayTime}:00`).getTime();
-      let isDuplicate = false;
-
-      if (!isNaN(punchTime)) {
-        const lastPunch = lastPunchMap.get(rec.workerCode);
-        if (lastPunch) {
-          const diffMs = punchTime - lastPunch.time;
-          // Duplicate if same employee punched within the threshold window and state matches
-          if (diffMs >= 0 && diffMs <= thresholdMs && lastPunch.state === rec.resolvedState) {
-            isDuplicate = true;
-            dupCount++;
-          }
-        }
-        if (!isDuplicate) {
-          lastPunchMap.set(rec.workerCode, {
-            time: punchTime,
-            state: rec.resolvedState,
-            deviceId: rec.deviceId,
-          });
-        }
-      }
+      if (rec.isDuplicateIgnored) dupCount++;
+      if (rec.isMissedPunch) missedCount++;
 
       return {
         ...rec,
         workerName: effectiveName,
         department: effectiveDept,
-        isDynamicDuplicate: isDuplicate,
       };
     });
 
     // Re-sort descending (newest records first) for the UI
-    processed.sort((a, b) => {
+    enriched.sort((a, b) => {
       const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
       const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
       if (isNaN(tA) || isNaN(tB)) return (b.id || '').localeCompare(a.id || '');
       return tB - tA;
     });
 
-    return { enrichedRecords: processed, detectedDuplicatesCount: dupCount };
-  }, [records, duplicateThresholdMinutes, workerMap]);
+    return { smartRecords: enriched, detectedDuplicatesCount: dupCount, missedPunchesCount: missedCount };
+  }, [records, workerMap]);
 
   // Filtered records by Date, Deduplication, Department, State, and Search
   const filteredRecords = useMemo(() => {
@@ -160,9 +134,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
     const monthStart = today.slice(0, 7) + '-01';
 
-    return enrichedRecords.filter((rec) => {
-      // 1. Deduplication filter
-      if (filterDuplicates && rec.isDynamicDuplicate) return false;
+    return smartRecords.filter((rec) => {
+      // 1. Deduplication filter (< 60 minutes)
+      if (filterDuplicates && rec.isDuplicateIgnored) return false;
 
       // 2. Date presets
       if (datePreset === 'today' && rec.displayDate !== today) return false;
@@ -177,8 +151,11 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       // 3. Department filter
       if (selectedDept !== 'all' && rec.department !== selectedDept) return false;
 
-      // 4. Punch state filter
-      if (selectedState !== 'all' && rec.resolvedState !== selectedState) return false;
+      // 4. Punch state & special filters
+      if (selectedState === 'IN' && rec.resolvedState !== 'IN') return false;
+      if (selectedState === 'OUT' && rec.resolvedState !== 'OUT') return false;
+      if (selectedState === 'MISSED' && !rec.isMissedPunch) return false;
+      if (selectedState === 'HR_OVERRIDE' && !rec.isHROverride && !rec.isManual) return false;
 
       // 5. Device filter
       if (selectedDeviceId !== 'all' && String(rec.deviceId) !== selectedDeviceId) return false;
@@ -196,7 +173,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       return true;
     });
   }, [
-    enrichedRecords,
+    smartRecords,
     filterDuplicates,
     datePreset,
     customFromDate,
@@ -233,9 +210,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       'التاريخ': r.displayDate,
       'الوقت': r.displayTime,
       'الحالة': r.resolvedState === 'IN' ? 'حضور' : 'انصراف',
-      'طريقة التسجيل': r.punchType,
+      'طريقة التسجيل': r.punchType === 'FACE' ? 'بصمة وجه' : r.punchType === 'CARD' ? 'كارت' : r.punchType === 'MANUAL' ? 'يدوي (HR)' : 'بصمة إصبع',
       'الماكينة': r.deviceName,
-      'حالة التكرار': r.isDynamicDuplicate ? 'مكررة' : 'أساسية',
+      'حالة الحركة': r.isMissedPunch ? 'بصمة ناقصة' : r.isHROverride ? 'معتمد HR' : r.isDuplicateIgnored ? 'تكرار مستبعد' : 'حركة سليمة',
       'ملاحظات': r.manualNote || '',
     }));
 
@@ -266,7 +243,10 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       deviceName: 'تسجيل يدوي',
       punchType: 'MANUAL',
       isManual: true,
-      manualNote: manualReason,
+      isHROverride: true,
+      isMissedPunch: false,
+      isDuplicateIgnored: false,
+      manualNote: manualReason || 'تسجيل يدوي بواسطة HR',
       manualEditor: manualEditor,
     };
 
@@ -307,10 +287,14 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       punchType: editPunchType,
       deviceId: editDeviceId,
       deviceName: device ? device.name : editingRecord.deviceName,
+      isManual: true,
+      isHROverride: true,
+      isMissedPunch: false,
+      isDuplicateIgnored: false,
       lateMinutes: editState === 'IN' && editLateMinutes > 0 ? editLateMinutes : undefined,
       overtimeHours: editOvertimeHours > 0 ? editOvertimeHours : undefined,
       isOvertime: editOvertimeHours > 0,
-      manualNote: editNote.trim() ? editNote.trim() : 'تم التعديل يدوياً',
+      manualNote: editNote.trim() ? editNote.trim() : 'تم التعديل والاعتماد يدوياً (HR Override)',
     };
 
     if (onUpdateRecord) {
@@ -353,46 +337,27 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Deduplication Toggle & Settings */}
-          <div className="flex items-center rounded-lg bg-slate-900 border border-slate-800 p-0.5">
-            <button
-              onClick={() => {
-                setFilterDuplicates(!filterDuplicates);
-                setCurrentPage(1);
-              }}
-              title="استبعاد البصمات المكررة لنفس العامل خلال نافذة زمنية قصيرة"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors cursor-pointer ${
-                filterDuplicates
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              {filterDuplicates ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              <span>استبعاد التكرار</span>
-              {detectedDuplicatesCount > 0 && filterDuplicates && (
-                <span className="px-1.5 py-0.2 rounded-full bg-blue-800 text-[10px] font-mono">
-                  -{detectedDuplicatesCount}
-                </span>
-              )}
-            </button>
-
-            {filterDuplicates && (
-              <select
-                value={duplicateThresholdMinutes}
-                onChange={(e) => {
-                  setDuplicateThresholdMinutes(Number(e.target.value));
-                  setCurrentPage(1);
-                }}
-                title="تحديد النافذة الزمنية لاحتساب البصمة المكررة"
-                className="bg-transparent text-[11px] text-slate-300 px-2 py-1 outline-none border-r border-slate-800 cursor-pointer"
-              >
-                <option value={5} className="bg-slate-900">خلال 5 دقائق</option>
-                <option value={10} className="bg-slate-900">خلال 10 دقائق</option>
-                <option value={15} className="bg-slate-900">خلال 15 دقيقة</option>
-                <option value={30} className="bg-slate-900">خلال 30 دقيقة</option>
-              </select>
+          {/* Deduplication Toggle (Smart 1-Hour Rule) */}
+          <button
+            onClick={() => {
+              setFilterDuplicates(!filterDuplicates);
+              setCurrentPage(1);
+            }}
+            title="تجاهل تكرار البصمة الأقل من ساعة واحدة (Smart Deduplication)"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer border ${
+              filterDuplicates
+                ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            {filterDuplicates ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            <span>استبعاد التكرار (&lt; 1 ساعة)</span>
+            {detectedDuplicatesCount > 0 && filterDuplicates && (
+              <span className="px-1.5 py-0.2 rounded-full bg-blue-800 text-[10px] font-mono">
+                -{detectedDuplicatesCount}
+              </span>
             )}
-          </div>
+          </button>
 
           {/* Add Manual Record */}
           {workers.length > 0 && (
@@ -547,9 +512,11 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           onChange={(e) => { setSelectedState(e.target.value); setCurrentPage(1); }}
           className="bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 cursor-pointer"
         >
-          <option value="all">كل الحركات (حضور وانصراف)</option>
+          <option value="all">كل الحركات</option>
           <option value="IN">حضور فقط</option>
           <option value="OUT">انصراف فقط</option>
+          <option value="MISSED">بصمات ناقصة ({missedPunchesCount})</option>
+          <option value="HR_OVERRIDE">معتمد ومعدل يدوياً (HR)</option>
         </select>
 
         {devices.length > 0 && (
@@ -602,7 +569,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   <tr 
                     key={record.id} 
                     className={`hover:bg-slate-850 transition-colors ${
-                      record.isDynamicDuplicate ? 'bg-amber-950/15' : ''
+                      record.isDuplicateIgnored ? 'bg-amber-950/20 opacity-75' : record.isMissedPunch ? 'bg-rose-950/15' : ''
                     }`}
                   >
                     <td className="py-2 px-3 text-slate-300 font-bold">
@@ -611,11 +578,24 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                       </span>
                     </td>
                     <td className="py-2 px-3 text-white font-sans font-medium">
-                      <div className="flex items-center gap-1.5">
-                        <span>{record.workerName}</span>
-                        {record.isDynamicDuplicate && (
-                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans">
-                            بصمة مكررة
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span>{record.workerName}</span>
+                          {record.isHROverride && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-sans font-normal" title="حركة معتمدة أو مضافة يدوياً بواسطة HR">
+                              معتمد HR
+                            </span>
+                          )}
+                        </div>
+                        {record.isMissedPunch && (
+                          <span className="text-[9px] text-rose-400 font-sans flex items-center gap-1" title={record.missedPunchReason}>
+                            <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                            <span>{record.missedPunchReason || 'بصمة ناقصة'}</span>
+                          </span>
+                        )}
+                        {record.isDuplicateIgnored && (
+                          <span className="text-[9px] text-amber-400/80 font-sans">
+                            {record.duplicateReason || 'تكرار مستبعد (أقل من ساعة)'}
                           </span>
                         )}
                       </div>
@@ -638,8 +618,28 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                         {record.resolvedState === 'IN' ? 'حضور' : 'انصراف'}
                       </span>
                     </td>
-                    <td className="py-2 px-3 text-center text-slate-400 text-[10px] font-sans">
-                      {record.punchType}
+                    <td className="py-2 px-3 text-center">
+                      {record.punchType === 'FACE' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                          <ScanFace className="w-3 h-3 text-purple-400 shrink-0" />
+                          <span>بصمة وجه</span>
+                        </span>
+                      ) : record.punchType === 'CARD' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          <CreditCard className="w-3 h-3 text-amber-400 shrink-0" />
+                          <span>كارت</span>
+                        </span>
+                      ) : record.punchType === 'MANUAL' || record.isManual ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                          <Edit2 className="w-3 h-3 text-indigo-400 shrink-0" />
+                          <span>يدوي (HR)</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                          <Fingerprint className="w-3 h-3 text-cyan-400 shrink-0" />
+                          <span>بصمة إصبع</span>
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 px-3 text-slate-300 font-sans text-[11px]">
                       {record.deviceName}

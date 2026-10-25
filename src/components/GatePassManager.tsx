@@ -351,7 +351,7 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
                         <button
                           onClick={() => handleOpenEdit(pass)}
                           className="p-1 rounded bg-slate-800 hover:bg-blue-600/30 text-slate-300 hover:text-blue-300 transition-colors cursor-pointer"
-                          title="تعديل بيانات التصريح (النقطة 10)"
+                          title="تعديل بيانات التصريح"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>

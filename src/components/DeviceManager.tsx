@@ -290,24 +290,31 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
         const newWorkers: Worker[] = res.users.map((u, i) => {
           const userCode = Number(u.userId) || 1000 + i;
           const cleanName = u.name ? u.name.trim() : '';
-          const isEnglish = /^[A-Za-z\s.'-]+$/.test(cleanName) && cleanName.length > 2;
+          const existing = (workers || []).find((w) => w.code === userCode);
+
+          // Point 2: Protect and prioritize the real name from device or existing database
+          const realName = (cleanName && !cleanName.startsWith('عامل كود'))
+            ? cleanName
+            : (existing?.name && !existing.name.startsWith('عامل كود') ? existing.name : (cleanName || `عامل #${userCode}`));
+
+          const isEnglish = /^[A-Za-z\s.'-]+$/.test(realName) && realName.length > 2;
 
           return {
-            id: `w-zkt-${device.id}-${u.userId}-${i}`,
+            id: existing ? existing.id : `w-zkt-${device.id}-${u.userId}-${i}`,
             code: userCode,
-            name: cleanName || `عامل كود #${userCode}`,
-            department: device.department || 'إنتاج',
-            line: 'خط 1',
-            jobTitle: isEnglish ? 'فني تشغيل (بنغال)' : 'عامل تشغيل',
-            nationality: isEnglish ? 'بنغلاديشي' : 'مصري',
-            shiftId: isEnglish ? 'bangladeshi' : 'standard',
-            customGraceMinutes: 15,
-            isActive: true,
-            assignedDeviceIds: [device.id],
+            name: realName,
+            department: existing?.department || device.department || 'إنتاج',
+            line: existing?.line || 'خط 1',
+            jobTitle: existing?.jobTitle || (isEnglish ? 'فني تشغيل (بنغال)' : 'عامل تشغيل'),
+            nationality: isEnglish ? 'بنغلاديشي' : (existing?.nationality || 'مصري'),
+            shiftId: isEnglish ? 'bangladeshi' : (existing?.shiftId || 'standard'),
+            customGraceMinutes: existing?.customGraceMinutes ?? 15,
+            isActive: existing ? existing.isActive : true,
+            assignedDeviceIds: Array.from(new Set([...(existing?.assignedDeviceIds || []), device.id])),
             hasFingerprint: true,
             hasFace: false,
-            joinDate: new Date().toISOString().slice(0, 10),
-            isNameSyncedToDevice: Boolean(cleanName),
+            joinDate: existing?.joinDate || new Date().toISOString().slice(0, 10),
+            isNameSyncedToDevice: Boolean(realName && !realName.startsWith('عامل #')),
             enrolledOnDeviceName: device.name,
           };
         });
@@ -408,22 +415,22 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Toast Notification */}
+      {/* Floating Toast Notification (Floating bottom-right corner: Zero layout shift) */}
       {notification && (
-        <div className={`p-3 rounded-lg text-xs flex items-center justify-between border ${
+        <div className={`fixed bottom-6 right-6 z-50 pointer-events-auto p-3.5 rounded-xl border text-xs flex items-center justify-between shadow-2xl backdrop-blur-md max-w-md animate-in fade-in slide-in-from-bottom-2 ${
           notification.type === 'error'
-            ? 'bg-rose-950/40 border-rose-800/60 text-rose-300'
-            : 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
+            ? 'bg-rose-950/95 border-rose-600/80 text-rose-200'
+            : 'bg-emerald-950/95 border-emerald-600/80 text-emerald-200'
         }`}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             {notification.type === 'error' ? (
               <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
             ) : (
               <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
             )}
-            <span>{notification.message}</span>
+            <span className="font-medium leading-relaxed">{notification.message}</span>
           </div>
-          <button onClick={() => setNotification(null)} className="text-slate-500 hover:text-white">✕</button>
+          <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-white mr-3 cursor-pointer">✕</button>
         </div>
       )}
 
@@ -504,13 +511,31 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                     </div>
                   </div>
 
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${
-                    isConnected 
-                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' 
-                      : 'bg-slate-800 text-slate-400 border border-slate-700'
-                  }`}>
-                    {isConnected ? 'متصل' : 'غير متصل'}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${
+                      isConnected 
+                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' 
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    }`}>
+                      {isConnected ? 'متصل' : 'غير متصل'}
+                    </span>
+
+                    <button
+                      onClick={() => handleOpenEdit(device)}
+                      className="p-1 rounded bg-slate-800 hover:bg-blue-600/30 text-slate-400 hover:text-blue-400 transition-colors cursor-pointer border border-slate-700/60"
+                      title="تعديل الماكينة"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      onClick={() => setConfirmDeleteId(device.id)}
+                      className="p-1 rounded bg-slate-800 hover:bg-rose-600/30 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer border border-slate-700/60"
+                      title="حذف الماكينة"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Connection Specs */}
@@ -549,56 +574,60 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                 </div>
               </div>
 
-              {/* Bottom Actions */}
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-1 text-xs">
-                <div className="flex items-center gap-1">
+              {/* Bottom Actions - 2 Clean Rows, Zero Overflow */}
+              <div className="pt-2.5 border-t border-slate-800/80 space-y-1.5 text-xs">
+                {/* Row 1: Connection & Pull Logs */}
+                <div className="grid grid-cols-2 gap-1.5">
                   {device.status === 'connected' ? (
                     <button
                       onClick={() => handleDisconnectDevice(device)}
                       disabled={isTesting}
-                      className="p-1.5 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-rose-200 border border-rose-800/50 transition-colors cursor-pointer text-[11px] flex items-center gap-1 font-medium"
+                      className="w-full py-1.5 px-2 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-rose-200 border border-rose-800/50 transition-colors cursor-pointer text-[11px] flex items-center justify-center gap-1.5 font-medium"
                       title="قطع الاتصال بالماكينة وإغلاق المقبس"
                     >
-                      <Unplug className="w-3.5 h-3.5 text-rose-400" />
+                      <Unplug className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                       <span>إلغاء الاتصال</span>
                     </button>
                   ) : (
                     <button
                       onClick={() => handleConnectDevice(device)}
                       disabled={isTesting}
-                      className="p-1.5 rounded bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 hover:text-emerald-200 border border-emerald-800/50 transition-colors cursor-pointer text-[11px] flex items-center gap-1 font-medium"
+                      className="w-full py-1.5 px-2 rounded bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 hover:text-emerald-200 border border-emerald-800/50 transition-colors cursor-pointer text-[11px] flex items-center justify-center gap-1.5 font-medium"
                       title="فتح الاتصال بالماكينة عبر المنفذ 4370"
                     >
-                      <Power className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin text-emerald-400' : 'text-emerald-400'}`} />
+                      <Power className={`w-3.5 h-3.5 shrink-0 ${isTesting ? 'animate-spin text-emerald-400' : 'text-emerald-400'}`} />
                       <span>{isTesting ? 'جاري الاتصال...' : 'اتصال'}</span>
                     </button>
                   )}
 
                   <button
                     onClick={() => onSyncDevice(device.id)}
-                    className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer text-[11px] flex items-center gap-1"
+                    className="w-full py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/80 transition-colors cursor-pointer text-[11px] flex items-center justify-center gap-1.5 font-medium"
                     title="سحب الحركات"
                   >
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <span>سحب حركات</span>
                   </button>
+                </div>
 
+                {/* Row 2: Upload/Download Users & Wipe Cache */}
+                <div className="grid grid-cols-3 gap-1.5">
                   <button
                     onClick={() => handleQuickUploadUsers(device)}
-                    className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer text-[11px] flex items-center gap-1"
+                    className="py-1 px-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/50 transition-colors cursor-pointer text-[10px] flex items-center justify-center gap-1 truncate"
                     title="رفع بيانات وبصمات المستخدمين لهذه الماكينة"
                   >
-                    <UploadCloud className="w-3.5 h-3.5 text-blue-400" />
-                    <span>رفع عمال</span>
+                    <UploadCloud className="w-3 h-3 text-blue-400 shrink-0" />
+                    <span className="truncate">رفع عمال</span>
                   </button>
 
                   <button
                     onClick={() => handleQuickDownloadUsers(device)}
-                    className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer text-[11px] flex items-center gap-1"
+                    className="py-1 px-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/50 transition-colors cursor-pointer text-[10px] flex items-center justify-center gap-1 truncate"
                     title="سحب المستخدمين والبصمات من هذه الماكينة"
                   >
-                    <DownloadCloud className="w-3.5 h-3.5 text-amber-400" />
-                    <span>سحب عمال</span>
+                    <DownloadCloud className="w-3 h-3 text-amber-400 shrink-0" />
+                    <span className="truncate">سحب عمال</span>
                   </button>
 
                   <button
@@ -607,29 +636,11 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                       setWipeConfirmText('');
                       setAcknowledgedBackup(false);
                     }}
-                    className="p-1.5 rounded bg-slate-800 hover:bg-rose-950/40 text-rose-300 hover:text-rose-200 border border-slate-700/60 hover:border-rose-700/50 transition-colors cursor-pointer text-[11px] flex items-center gap-1"
+                    className="py-1 px-1.5 rounded bg-slate-800/80 hover:bg-rose-950/40 text-rose-300 hover:text-rose-200 border border-slate-700/50 hover:border-rose-700/50 transition-colors cursor-pointer text-[10px] flex items-center justify-center gap-1 truncate"
                     title="تفريغ ذاكرة حركات الماكينة بأمان لتسريعها (CMD_CLEAR_ATTLOG)"
                   >
-                    <DatabaseZap className="w-3.5 h-3.5 text-rose-400" />
-                    <span>تفريغ الذاكرة</span>
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => handleOpenEdit(device)}
-                    className="p-1.5 rounded bg-slate-800 hover:bg-blue-600/30 text-slate-300 hover:text-blue-400 transition-colors cursor-pointer"
-                    title="تعديل الماكينة"
-                  >
-                    <Edit2 className="w-3.5 h-3.5" />
-                  </button>
-
-                  <button
-                    onClick={() => setConfirmDeleteId(device.id)}
-                    className="p-1.5 rounded bg-slate-800 hover:bg-rose-600/30 text-slate-300 hover:text-rose-400 transition-colors cursor-pointer"
-                    title="حذف الماكينة"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <DatabaseZap className="w-3 h-3 text-rose-400 shrink-0" />
+                    <span className="truncate">تفريغ</span>
                   </button>
                 </div>
               </div>

@@ -87,10 +87,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   const [syncAction, setSyncAction] = useState<'download' | 'upload'>('download');
   const [syncTargetDeviceId, setSyncTargetDeviceId] = useState<number | 'all'>('all');
   const [isSyncingProcess, setIsSyncingProcess] = useState<boolean>(false);
-
-  // Discovered unassigned codes directly from physical machines
   const [customEnrolledCode, setCustomEnrolledCode] = useState<string>('');
-  const [discoveredEnrolledCodes, setDiscoveredEnrolledCodes] = useState<number[]>([109, 115, 120]);
 
   const isAdministrativeDept = useMemo(() => {
     const adminDepts = ['إدارة', 'الإدارة', 'حسابات', 'مشتريات', 'أمن', 'صيانة', 'مخازن', 'نظافة', 'بوفيه'];
@@ -274,8 +271,6 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     };
 
     onAddWorker(newWorker);
-    // Remove from discovered codes if it was one
-    setDiscoveredEnrolledCodes(prev => prev.filter(c => c !== newWorkerCode));
 
     setShowAddWorkerModal(false);
     setNewWorkerCode((prev) => prev + 1);
@@ -286,7 +281,6 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     setTimeout(() => setNotification(null), 6000);
   };
 
-  // Initiate naming an enrolled code found on machine
   const handleStartNamingCode = (code: number) => {
     setNewWorkerCode(code);
     setNewWorkerName('');
@@ -303,7 +297,6 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
       setShowSyncModal(false);
 
       if (syncAction === 'upload') {
-        // Mark all active workers as synced to device
         workers.forEach(w => {
           if (w.isActive && !w.isNameSyncedToDevice) {
             onUpdateWorker({
@@ -322,16 +315,11 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
 
         setNotification(`تم إرسال ورفع الأسماء وربطها بالأكواد بنجاح إلى (${targetName})! عند بصم العامل سيظهر اسمه فوراً على شاشة الجهاز.`);
       } else {
-        // Download from device: Discover new unlinked codes
-        const randomNewCode = Math.max(...workers.map(w => w.code), 120) + Math.floor(Math.random() * 3) + 1;
-        if (!discoveredEnrolledCodes.includes(randomNewCode) && !workers.some(w => w.code === randomNewCode)) {
-          setDiscoveredEnrolledCodes(prev => [randomNewCode, ...prev]);
-        }
         const sourceName = syncTargetDeviceId === 'all'
           ? 'الماكينات المتاحة'
           : devices.find((d) => d.id === syncTargetDeviceId)?.name || `ماكينة #${syncTargetDeviceId}`;
 
-        setNotification(`تم فحص وسحب الأكواد وقوالب البصمات من (${sourceName}). يمكنك الآن مراجعة الأكواد الجديدة وتسمية أصحابها.`);
+        setNotification(`تم فحص وسحب الأكواد وقوالب البصمات من (${sourceName}) بنجاح.`);
       }
       setTimeout(() => setNotification(null), 7000);
     }, 1200);
@@ -431,14 +419,14 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
 
   return (
     <div className="space-y-3.5">
-      {/* Toast Notification */}
+      {/* Toast Notification (Floating bottom-right: Zero Layout Shift) */}
       {notification && (
-        <div className="bg-emerald-950/60 border border-emerald-700/60 text-emerald-200 p-3 rounded-lg text-xs flex items-center justify-between shadow-lg">
+        <div className="fixed bottom-6 right-6 z-50 max-w-md bg-emerald-950/95 border border-emerald-700/80 text-emerald-200 p-3 rounded-xl text-xs flex items-center justify-between shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 pointer-events-auto">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span className="font-medium">{notification}</span>
+            <span className="font-medium leading-relaxed">{notification}</span>
           </div>
-          <button onClick={() => setNotification(null)} className="text-emerald-400 hover:text-white cursor-pointer mr-2">✕</button>
+          <button onClick={() => setNotification(null)} className="text-emerald-400 hover:text-white cursor-pointer mr-2 p-1">✕</button>
         </div>
       )}
 
@@ -596,33 +584,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
         </div>
       </div>
 
-      {/* Discovered Unlinked Codes Banner (if any) */}
-      {discoveredEnrolledCodes.length > 0 && (
-        <div className="bg-blue-950/40 border border-blue-800/60 rounded-lg p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-blue-300 font-semibold text-xs">
-              <Radio className="w-4 h-4 text-blue-400 animate-pulse" />
-              <span>أكواد مسجلة ببصمة على الماكينة وجاهزة لربط الأسماء:</span>
-            </div>
-            <span className="text-[11px] text-slate-400">
-              (تم سحبها من الماكينات ولم تسجل بياناتها في البرنامج بعد)
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {discoveredEnrolledCodes.map((code) => (
-              <button
-                key={code}
-                onClick={() => handleStartNamingCode(code)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-blue-900/60 hover:bg-blue-800/80 text-white text-xs border border-blue-600/40 transition-colors cursor-pointer"
-              >
-                <Tag className="w-3 h-3 text-blue-300" />
-                <span className="font-mono font-bold">كود #{code}</span>
-                <span className="text-[11px] text-blue-200 underline mr-1">اضغط لتسمية العامل</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+
 
       {/* Table */}
       <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">

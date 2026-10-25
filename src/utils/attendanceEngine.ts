@@ -53,40 +53,191 @@ export function resolveSmartPunchState(
 }
 
 /**
- * Filter out duplicate consecutive punches made within cooldown window (e.g. 5 minutes).
+ * Smart Attendance Processing Engine (خوارزمية معالجة البصمات الذكية الاحترافية)
+ * 1. 1-Hour Cooldown Deduplication: Ignore any punch occurring within < 60 minutes of previous accepted punch.
+ * 2. Overnight Shifts Attachment: Punches between 00:00 and 05:59 AM attach to previous day as OUT if worker was checked in.
+ * 3. First & Last Punch: 1st punch = IN, last punch = OUT, intermediate punches = ignored.
+ * 4. Missed Punch Exceptions: Mark single punch days as isMissedPunch without guessing fake times.
+ * 5. HR Override Protection: isHROverride / isManual records are preserved exactly as set by HR.
+ */
+export function processSmartAttendanceLogs(records: AttendanceRecord[]): AttendanceRecord[] {
+  if (!records || records.length === 0) return [];
+
+  // Group records by workerCode
+  const workerGroups = new Map<number, AttendanceRecord[]>();
+  for (const r of records) {
+    let list = workerGroups.get(r.workerCode);
+    if (!list) {
+      list = [];
+      workerGroups.set(r.workerCode, list);
+    }
+    list.push({ ...r });
+  }
+
+  const processedAll: AttendanceRecord[] = [];
+
+  workerGroups.forEach((workerRecords) => {
+    // 1. Sort all punches for this worker chronologically
+    workerRecords.sort((a, b) => {
+      const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
+      const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
+      if (isNaN(tA) || isNaN(tB)) return (a.id || '').localeCompare(b.id || '');
+      return tA - tB;
+    });
+
+    // 2. Deduplication (< 60 minutes / 1 hour rule)
+    const validPunches: AttendanceRecord[] = [];
+    let lastAcceptedTime: number | null = null;
+
+    for (const rec of workerRecords) {
+      // HR Override is always authoritative and protected
+      if (rec.isHROverride || (rec.isManual && rec.resolvedState)) {
+        rec.isDuplicateIgnored = false;
+        validPunches.push(rec);
+        const t = new Date(`${rec.displayDate}T${rec.displayTime}:00`).getTime();
+        if (!isNaN(t)) lastAcceptedTime = t;
+        continue;
+      }
+
+      const punchTime = new Date(`${rec.displayDate}T${rec.displayTime}:00`).getTime();
+      if (isNaN(punchTime)) {
+        validPunches.push(rec);
+        continue;
+      }
+
+      // If less than 60 minutes from last accepted punch -> ignore as duplicate
+      if (lastAcceptedTime !== null && (punchTime - lastAcceptedTime) < 60 * 60 * 1000) {
+        rec.isDuplicateIgnored = true;
+        rec.duplicateReason = 'تكرار بصمة (أقل من ساعة واحدة)';
+        processedAll.push(rec);
+      } else {
+        rec.isDuplicateIgnored = false;
+        validPunches.push(rec);
+        lastAcceptedTime = punchTime;
+      }
+    }
+
+    // 3. Work Day Assignment (Handling Overnight Shifts & Late Night Punches)
+    const dayPunchesMap = new Map<string, AttendanceRecord[]>();
+
+    for (const rec of validPunches) {
+      const [hStr] = (rec.displayTime || '08:00').split(':');
+      const hours = parseInt(hStr, 10) || 0;
+      let targetWorkDay = rec.displayDate;
+
+      // Check if late night punch (before 06:00 AM)
+      if (hours < 6) {
+        // Calculate previous calendar date YYYY-MM-DD
+        const curDate = new Date(`${rec.displayDate}T12:00:00`);
+        curDate.setDate(curDate.getDate() - 1);
+        const prevDayStr = curDate.toISOString().slice(0, 10);
+
+        // Did this worker have punches on the previous day?
+        const prevDayPunches = dayPunchesMap.get(prevDayStr);
+        if (prevDayPunches && prevDayPunches.length > 0) {
+          targetWorkDay = prevDayStr;
+        }
+      }
+
+      let dList = dayPunchesMap.get(targetWorkDay);
+      if (!dList) {
+        dList = [];
+        dayPunchesMap.set(targetWorkDay, dList);
+      }
+      dList.push(rec);
+    }
+
+    // 4. First and Last Punch Rule per Work Day & Missed Punch Detection
+    dayPunchesMap.forEach((punchesOnDay) => {
+      punchesOnDay.sort((a, b) => {
+        const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
+        const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
+        return tA - tB;
+      });
+
+      if (punchesOnDay.length === 1) {
+        const singlePunch = punchesOnDay[0];
+
+        if (singlePunch.isHROverride) {
+          singlePunch.isMissedPunch = true;
+          singlePunch.missedPunchType = singlePunch.resolvedState === 'IN' ? 'OUT' : 'IN';
+          singlePunch.missedPunchReason = singlePunch.resolvedState === 'IN'
+            ? 'بصمة انصراف مفقودة (تم تسجيل الحضور يدوياً)'
+            : 'بصمة حضور مفقودة (تم تسجيل الانصراف يدوياً)';
+          processedAll.push(singlePunch);
+          return;
+        }
+
+        const [hStr] = (singlePunch.displayTime || '08:00').split(':');
+        const hour = parseInt(hStr, 10) || 8;
+
+        if (hour < 12 || singlePunch.rawState === 'IN') {
+          singlePunch.resolvedState = 'IN';
+          singlePunch.isMissedPunch = true;
+          singlePunch.missedPunchType = 'OUT';
+          singlePunch.missedPunchReason = 'بصمة انصراف مفقودة (لم يسجل خروج)';
+        } else {
+          singlePunch.resolvedState = 'OUT';
+          singlePunch.isMissedPunch = true;
+          singlePunch.missedPunchType = 'IN';
+          singlePunch.missedPunchReason = 'بصمة حضور مفقودة (لم يسجل دخول)';
+        }
+        processedAll.push(singlePunch);
+
+      } else {
+        // 2 or more punches: First is IN, Last is OUT
+        const firstPunch = punchesOnDay[0];
+        if (!firstPunch.isHROverride) {
+          firstPunch.resolvedState = 'IN';
+        }
+        firstPunch.isDuplicateIgnored = false;
+        firstPunch.isMissedPunch = false;
+        firstPunch.missedPunchReason = undefined;
+        processedAll.push(firstPunch);
+
+        const lastPunch = punchesOnDay[punchesOnDay.length - 1];
+        if (!lastPunch.isHROverride) {
+          lastPunch.resolvedState = 'OUT';
+        }
+        lastPunch.isDuplicateIgnored = false;
+        lastPunch.isMissedPunch = false;
+        lastPunch.missedPunchReason = undefined;
+        processedAll.push(lastPunch);
+
+        // Intermediate punches
+        for (let i = 1; i < punchesOnDay.length - 1; i++) {
+          const midPunch = punchesOnDay[i];
+          if (midPunch.isHROverride) {
+            processedAll.push(midPunch);
+          } else {
+            midPunch.isDuplicateIgnored = true;
+            midPunch.duplicateReason = 'بصمة بينية (تم اعتماد الأولى كحضور والأخيرة كانصراف)';
+            processedAll.push(midPunch);
+          }
+        }
+      }
+    });
+  });
+
+  // Sort overall descending by timestamp for display
+  processedAll.sort((a, b) => {
+    const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
+    const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
+    if (isNaN(tA) || isNaN(tB)) return (b.id || '').localeCompare(a.id || '');
+    return tB - tA;
+  });
+
+  return processedAll;
+}
+
+/**
+ * Filter out duplicate consecutive punches made within cooldown window (e.g. 60 minutes).
  */
 export function markDuplicatePunches(
   records: AttendanceRecord[],
-  cooldownMinutes: number = 5
+  cooldownMinutes: number = 60
 ): AttendanceRecord[] {
-  const sorted = [...records].sort((a, b) => {
-    if (a.workerCode !== b.workerCode) return a.workerCode - b.workerCode;
-    return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
-  });
-
-  const result: AttendanceRecord[] = [];
-  const lastAcceptedByWorker: Record<number, number> = {};
-
-  for (const record of sorted) {
-    const recordTime = new Date(record.timestamp).getTime();
-    const lastTime = lastAcceptedByWorker[record.workerCode];
-
-    if (lastTime && recordTime - lastTime < cooldownMinutes * 60 * 1000) {
-      result.push({
-        ...record,
-        isDuplicateIgnored: true,
-        duplicateGroup: `grp-${record.workerCode}-${Math.floor(lastTime / 100000)}`,
-      });
-    } else {
-      lastAcceptedByWorker[record.workerCode] = recordTime;
-      result.push({
-        ...record,
-        isDuplicateIgnored: false,
-      });
-    }
-  }
-
-  return result;
+  return processSmartAttendanceLogs(records);
 }
 
 /**

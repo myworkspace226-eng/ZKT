@@ -14,6 +14,9 @@ export interface ZktLogRecord {
   type: number; // 0: Check-in, 1: Check-out, etc.
   state: number;
   ip: string;
+  verifyType?: number;
+  verifyMode?: number;
+  workerName?: string;
 }
 
 export interface DeviceLogsResult {

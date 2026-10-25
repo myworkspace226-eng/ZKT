@@ -9,7 +9,8 @@ import {
   DoorOpen, 
   FileSpreadsheet, 
   Settings,
-  MonitorDown
+  MonitorDown,
+  Activity
 } from 'lucide-react';
 
 export type ActiveTab = 
@@ -23,6 +24,13 @@ export type ActiveTab =
   | 'reports' 
   | 'settings';
 
+export interface ActivityLogEntry {
+  id: string;
+  time: string;
+  text: string;
+  type?: 'success' | 'error' | 'info' | 'warning';
+}
+
 interface SidebarProps {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
@@ -30,6 +38,7 @@ interface SidebarProps {
   devicesCount: number;
   workersCount: number;
   gatePassesCount: number;
+  activityLogs?: ActivityLogEntry[];
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -39,6 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   devicesCount,
   workersCount,
   gatePassesCount,
+  activityLogs = [],
 }) => {
   const menuItems = [
     {
@@ -95,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-64 bg-slate-900 border-l border-slate-800 flex flex-col shrink-0 select-none">
+    <aside className="w-64 bg-slate-900 border-l border-slate-800 flex flex-col shrink-0 select-none h-full sticky top-0">
       {/* Menu Navigation */}
       <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
         {menuItems.map((item) => {
@@ -132,11 +142,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </nav>
 
+      {/* Activity Log (سجل العمليات الأخير) */}
+      <div className="p-2.5 border-t border-slate-800/80 bg-slate-950/40 shrink-0">
+        <div className="flex items-center justify-between mb-1.5 text-[11px] font-bold text-slate-300">
+          <div className="flex items-center gap-1.5">
+            <Activity className="w-3.5 h-3.5 text-blue-400" />
+            <span>سجل العمليات الأخير</span>
+          </div>
+          <span className="text-[9px] text-slate-500 font-mono">{activityLogs.length}</span>
+        </div>
+
+        <div className="space-y-1 max-h-32 overflow-y-auto pr-0.5">
+          {activityLogs.length === 0 ? (
+            <div className="text-[10px] text-slate-500 py-1 text-center">لا توجد عمليات مسجلة بعد</div>
+          ) : (
+            activityLogs.slice(0, 4).map((log) => (
+              <div key={log.id} className="text-[10px] p-1.5 rounded bg-slate-900 border border-slate-800/80 flex items-start gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${
+                  log.type === 'error' ? 'bg-rose-500' : log.type === 'warning' ? 'bg-amber-400' : 'bg-emerald-400'
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-slate-300 leading-tight truncate">{log.text}</p>
+                  <span className="text-[9px] text-slate-500 font-mono">{log.time}</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
       {/* Footer Info */}
-      <div className="p-3 border-t border-slate-800/80 text-[10px] text-slate-400 bg-slate-950/40">
+      <div className="p-3 border-t border-slate-800/80 text-[10px] text-slate-400 bg-slate-950/40 shrink-0">
         <div className="flex items-center justify-between font-mono">
           <span title="مطور النظام">المطور: Muhammad Abdullah</span>
-          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 1.0.0</span>
+          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 3.0.6</span>
         </div>
       </div>
     </aside>

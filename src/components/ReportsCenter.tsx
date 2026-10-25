@@ -30,6 +30,18 @@ import {
 import { Worker, AttendanceRecord, ShiftRule, AbsenceCategory, GatePass, Device } from '../types';
 import { exportToExcel, exportStyledExcel, calculateDailyPerformance } from '../utils/attendanceEngine';
 
+const ARABIC_WEEKDAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+export const formatHoursAndMinutes = (hoursDecimal: number): string => {
+  if (!hoursDecimal || hoursDecimal <= 0) return '0 س';
+  const totalMinutes = Math.round(hoursDecimal * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (m === 0) return `${h} س`;
+  if (h === 0) return `${m} د`;
+  return `${h} س و ${m} د`;
+};
+
 interface ReportsCenterProps {
   workers: Worker[];
   attendanceRecords: AttendanceRecord[];
@@ -64,19 +76,29 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   const [absenceOverrides, setAbsenceOverrides] = useState<Record<number, { category: AbsenceCategory; note: string }>>({});
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // --------------------------------------------------------------------------
-  // POINT 12: WORKER DOSSIER STATE (الملف الشامل للعامل)
-  // --------------------------------------------------------------------------
-  const [dossierWorkerCode, setDossierWorkerCode] = useState<number>(workers.length > 0 ? workers[0].code : 0);
+  // WORKER DOSSIER STATE
+  const sortedWorkers = useMemo(() => {
+    return [...workers].sort((a, b) => a.code - b.code);
+  }, [workers]);
+
+  const [dossierWorkerCode, setDossierWorkerCode] = useState<number>(() => {
+    return workers.length > 0 ? Math.min(...workers.map((w) => w.code)) : 0;
+  });
   const [dossierSearch, setDossierSearch] = useState<string>('');
 
-  // --------------------------------------------------------------------------
-  // POINT 13: ADVANCED OVERTIME CONTROLS & PARAMETERS
-  // --------------------------------------------------------------------------
+  const filteredDossierWorkers = useMemo(() => {
+    if (!dossierSearch.trim()) return sortedWorkers;
+    const q = dossierSearch.trim().toLowerCase();
+    return sortedWorkers.filter((w) => 
+      String(w.code).includes(q) ||
+      w.name.toLowerCase().includes(q) ||
+      w.department.toLowerCase().includes(q)
+    );
+  }, [sortedWorkers, dossierSearch]);
+
+  // ADVANCED OVERTIME CONTROLS (HOURS & MINUTES ONLY - ZERO FINANCIAL VALUES)
   const [otViewMode, setOtViewMode] = useState<'summary' | 'detailed'>('summary');
-  const [otDepartureGrace, setOtDepartureGrace] = useState<number>(15); // 15 mins default (4:30 - 4:45 is normal departure)
-  const [otMinThresholdMinutes, setOtMinThresholdMinutes] = useState<number>(30); // overtime starts if worked >= 30m
-  const [otHourlyRate, setOtHourlyRate] = useState<number>(35); // EGP per hour default
+  const [otDepartureGrace, setOtDepartureGrace] = useState<number>(15);
   const [otDeviceFilter, setOtDeviceFilter] = useState<string>('all');
   const [otDepartmentFilter, setOtDepartmentFilter] = useState<string>('all');
   const [otNationalityFilter, setOtNationalityFilter] = useState<string>('all');
@@ -285,16 +307,33 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     const [endH, endM] = shift.endTime.split(':').map(Number);
     const scheduledEndMinutes = endH * 60 + endM;
 
+    // Index worker records by date for O(1) lookup
+    const punchesByDate = new Map<string, AttendanceRecord[]>();
+    dossierWorkerRecords.forEach((r) => {
+      const d = r.timestamp.slice(0, 10);
+      let arr = punchesByDate.get(d);
+      if (!arr) {
+        arr = [];
+        punchesByDate.set(d, arr);
+      }
+      arr.push(r);
+    });
+
+    const passesByDate = new Map<string, GatePass>();
+    dossierWorkerPasses.forEach((g) => {
+      passesByDate.set(g.date, g);
+    });
+
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().slice(0, 10);
-      const dayName = d.toLocaleDateString('ar-EG', { weekday: 'long' });
-      const isFriday = d.getDay() === 5;
+      const dow = d.getDay();
+      const dayName = ARABIC_WEEKDAYS[dow] || '';
+      const isFriday = dow === 5;
 
-      const dayPunches = dossierWorkerRecords.filter((r) => r.timestamp.slice(0, 10) === dateStr);
+      const dayPunches = punchesByDate.get(dateStr) || [];
       const checkInPunch = dayPunches.find((p) => p.resolvedState === 'IN') || dayPunches[0];
       const checkOutPunch = dayPunches.length > 1 ? dayPunches[dayPunches.length - 1] : undefined;
-
-      const dayPass = dossierWorkerPasses.find((g) => g.date === dateStr);
+      const dayPass = passesByDate.get(dateStr);
 
       let status = 'غائب';
       let lateMins = 0;
@@ -310,7 +349,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           status = 'عطلة أسبوعية (جمعة)';
         }
       } else if (dayPunches.length > 0) {
-        // Calculate late minutes
         if (checkInPunch) {
           const punchTime = new Date(checkInPunch.timestamp);
           const [sH, sM] = shift.startTime.split(':').map(Number);
@@ -324,14 +362,13 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           }
         }
 
-        // Calculate overtime with departure grace
         if (checkOutPunch) {
           const outTime = new Date(checkOutPunch.timestamp);
           const outMins = outTime.getHours() * 60 + outTime.getMinutes();
           const pastEnd = outMins - scheduledEndMinutes;
           if (pastEnd > otDepartureGrace) {
             otHours = Number((pastEnd / 60).toFixed(2));
-            notes = `إضافي بعد انتهاء الوردية (${otHours} س)`;
+            notes = `إضافي بعد انتهاء الوردية (${formatHoursAndMinutes(otHours)})`;
           } else if (pastEnd >= 0) {
             notes = 'انصراف طبيعي ضمن فترة السماح (4:30 - 4:45)';
           }
@@ -361,7 +398,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     return list;
   }, [selectedDossierWorker, startDate, endDate, dossierWorkerRecords, dossierWorkerPasses, shifts, otDepartureGrace]);
 
-  // Totals for dossier
+  // Totals for dossier (Hours and Minutes only - Zero financial metrics)
   const dossierSummary = useMemo(() => {
     let presentDays = 0;
     let absentDays = 0;
@@ -383,9 +420,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       totalOtHours += row.overtimeHours || 0;
     });
 
-    const hourlyRate = selectedDossierWorker?.hourlyRate || otHourlyRate;
-    const estimatedPay = Math.round(totalOtHours * hourlyRate * 1.5);
-
     return {
       presentDays,
       absentDays,
@@ -394,9 +428,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       totalLateDays,
       totalOtHours: Number(totalOtHours.toFixed(2)),
       totalPasses,
-      estimatedPay,
     };
-  }, [dossierDailyLedger, dossierWorkerPasses, selectedDossierWorker, otHourlyRate]);
+  }, [dossierDailyLedger, dossierWorkerPasses]);
 
   const handleExportDossier = () => {
     if (!selectedDossierWorker) return;
@@ -444,8 +477,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     });
   }, [workers, otDepartmentFilter, otNationalityFilter, otDeviceFilter]);
 
-  // Advanced Overtime Analysis Per Worker & Per Day
-  const { advancedOtSummary, advancedOtDailyPunches, totalOtFactoryHours, totalOtEstimatedPay, otWorkersCount } = useMemo(() => {
+  // Advanced Overtime Analysis Per Worker & Per Day (Optimized & Non-Blocking - Hours & Minutes Only)
+  const { advancedOtSummary, advancedOtDailyPunches, totalOtFactoryHours, otWorkersCount } = useMemo(() => {
     const summaryMap = new Map<number, {
       worker: Worker;
       daysWorked: number;
@@ -453,35 +486,54 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       shiftOtHours: number;
       fridayOtHours: number;
       totalOtHours: number;
-      estimatedPay: number;
       machineName: string;
     }>();
 
     const dailyPunchesList: any[] = [];
 
-    // Group records by workerCode and date
-    // Map: workerCode -> Map: dateStr -> AttendanceRecord[]
-    const workerDateMap = new Map<number, Map<string, AttendanceRecord[]>>();
+    // Pre-cache shift end times to avoid re-parsing inside loop
+    const shiftMap = new Map<string, { endMinutes: number; endTime: string }>();
+    shifts.forEach((s) => {
+      const [endH, endM] = s.endTime.split(':').map(Number);
+      shiftMap.set(s.id, { endMinutes: endH * 60 + endM, endTime: s.endTime });
+    });
 
+    // Pre-cache device names
+    const deviceMap = new Map<number, string>(devices.map((d) => [d.id, d.name]));
+
+    // Fast day-of-week cache for date strings 'YYYY-MM-DD'
+    const dayOfWeekCache = new Map<string, number>();
+    const getDayOfWeek = (dStr: string) => {
+      let dow = dayOfWeekCache.get(dStr);
+      if (dow === undefined) {
+        dow = new Date(dStr + 'T00:00:00').getDay();
+        dayOfWeekCache.set(dStr, dow);
+      }
+      return dow;
+    };
+
+    // Group records by workerCode and date
+    const workerDateMap = new Map<number, Map<string, AttendanceRecord[]>>();
     recordsInDateRange.forEach((r) => {
-      if (!workerDateMap.has(r.workerCode)) {
-        workerDateMap.set(r.workerCode, new Map());
+      let dateMap = workerDateMap.get(r.workerCode);
+      if (!dateMap) {
+        dateMap = new Map();
+        workerDateMap.set(r.workerCode, dateMap);
       }
-      const dateMap = workerDateMap.get(r.workerCode)!;
-      if (!dateMap.has(r.displayDate)) {
-        dateMap.set(r.displayDate, []);
+      let punches = dateMap.get(r.displayDate);
+      if (!punches) {
+        punches = [];
+        dateMap.set(r.displayDate, punches);
       }
-      dateMap.get(r.displayDate)!.push(r);
+      punches.push(r);
     });
 
     let overallFactoryHours = 0;
-    let overallFactoryPay = 0;
     let activeOtWorkers = 0;
 
     filteredOtWorkers.forEach((w) => {
-      const shift = shifts.find((s) => s.id === w.shiftId) || shifts[0];
-      const [endH, endM] = shift.endTime.split(':').map(Number);
-      const scheduledEndMinutes = endH * 60 + endM;
+      const shiftInfo = shiftMap.get(w.shiftId) || shiftMap.values().next().value || { endMinutes: 16 * 60 + 30, endTime: '16:30' };
+      const scheduledEndMinutes = shiftInfo.endMinutes;
       const workerDates = workerDateMap.get(w.code);
 
       let daysWorked = 0;
@@ -489,14 +541,17 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       let shiftOt = 0;
       let fridayOt = 0;
 
-      const primaryDevice = devices.find((d) => w.assignedDeviceIds?.includes(d.id));
-      const machineName = primaryDevice ? primaryDevice.name : (w.enrolledOnDeviceName || 'ماكينة غير محددة');
+      const primaryDevName = w.assignedDeviceIds && w.assignedDeviceIds.length > 0
+        ? deviceMap.get(w.assignedDeviceIds[0])
+        : undefined;
+      const machineName = primaryDevName || w.enrolledOnDeviceName || 'ماكينة غير محددة';
 
       if (workerDates) {
         workerDates.forEach((punches, dateStr) => {
           daysWorked++;
-          const dObj = new Date(dateStr);
-          const isFriday = dObj.getDay() === 5;
+          const dow = getDayOfWeek(dateStr);
+          const isFriday = dow === 5;
+          const dayName = ARABIC_WEEKDAYS[dow] || '';
 
           const checkIn = punches.find((p) => p.resolvedState === 'IN') || punches[0];
           const checkOut = punches.length > 1 ? punches[punches.length - 1] : undefined;
@@ -506,8 +561,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           let minutesPast = 0;
 
           if (isFriday) {
-            // Friday overtime rule
-            dayOtHours = 16; // 8h * 2
+            dayOtHours = 16;
             fridayOt += dayOtHours;
             otDays++;
             statusLabel = 'عمل يوم الجمعة (مضاعف 2x - 16 ساعة)';
@@ -516,13 +570,11 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             const outMinutes = outDate.getHours() * 60 + outDate.getMinutes();
             minutesPast = outMinutes - scheduledEndMinutes;
 
-            // Point 13: Factory Departure Grace Logic
-            // If worker punches out within otDepartureGrace (e.g. 16:30 - 16:45), this is normal departure -> 0 overtime
             if (minutesPast > otDepartureGrace) {
               dayOtHours = Number((minutesPast / 60).toFixed(2));
               shiftOt += dayOtHours;
               otDays++;
-              statusLabel = `إضافي معتمد (${dayOtHours} س)`;
+              statusLabel = `إضافي معتمد (${formatHoursAndMinutes(dayOtHours)})`;
             } else if (minutesPast >= 0) {
               statusLabel = `انصراف طبيعي ضمن السماحية (${minutesPast} د - بدون إضافي)`;
             } else {
@@ -533,31 +585,27 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           if (dayOtHours > 0 || checkOut) {
             dailyPunchesList.push({
               date: dateStr,
-              dayName: dObj.toLocaleDateString('ar-EG', { weekday: 'long' }),
+              dayName,
               code: w.code,
               name: w.name,
               department: w.department,
               nationality: w.nationality,
               machineName: checkOut?.deviceName || machineName,
-              shiftEnd: shift.endTime,
+              shiftEnd: shiftInfo.endTime,
               checkInTime: checkIn?.displayTime || '-',
               checkOutTime: checkOut?.displayTime || 'لم يبصم',
               minutesPastShift: minutesPast,
               statusLabel,
               otHours: dayOtHours,
-              estimatedEgp: Math.round(dayOtHours * (w.hourlyRate || otHourlyRate) * 1.5),
             });
           }
         });
       }
 
       const totalOt = Number((shiftOt + fridayOt).toFixed(2));
-      const workerRate = w.hourlyRate || otHourlyRate;
-      const totalPay = Math.round(totalOt * workerRate * 1.5);
 
       if (totalOt > 0) {
         overallFactoryHours += totalOt;
-        overallFactoryPay += totalPay;
         activeOtWorkers++;
       }
 
@@ -568,7 +616,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         shiftOtHours: Number(shiftOt.toFixed(2)),
         fridayOtHours: Number(fridayOt.toFixed(2)),
         totalOtHours: totalOt,
-        estimatedPay: totalPay,
         machineName,
       });
     });
@@ -586,10 +633,9 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       advancedOtSummary: summaryArray,
       advancedOtDailyPunches: dailyPunchesList,
       totalOtFactoryHours: Number(overallFactoryHours.toFixed(1)),
-      totalOtEstimatedPay: overallFactoryPay,
       otWorkersCount: activeOtWorkers,
     };
-  }, [recordsInDateRange, filteredOtWorkers, shifts, devices, otDepartureGrace, otHourlyRate]);
+  }, [recordsInDateRange, filteredOtWorkers, shifts, devices, otDepartureGrace]);
 
   const handleExportAdvancedOt = () => {
     if (otViewMode === 'summary') {
@@ -606,13 +652,13 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         'إضافي الوردية (ساعة)': item.shiftOtHours,
         'إضافي الجمعة والسهر (ساعة)': item.fridayOtHours,
         'إجمالي ساعات الأوفر تايم': item.totalOtHours,
-        'المستحق المالي التقديري (ج.م)': item.estimatedPay,
+        'المدة (ساعات ودقائق)': formatHoursAndMinutes(item.totalOtHours),
       }));
       exportToExcel(
         data, 
         'ملخص_الإضافي', 
-        `تقرير_الإضافي_المتقدم_${startDate}_إلى_${endDate}`, 
-        `تقرير الساعات الإضافية المتقدم - الفترة من ${startDate} إلى ${endDate}`
+        `تقرير_الإضافي_${startDate}_إلى_${endDate}`, 
+        `تقرير الساعات الإضافية - الفترة من ${startDate} إلى ${endDate}`
       );
     } else {
       const data = advancedOtDailyPunches.map((item, idx) => ({
@@ -629,7 +675,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         'الدقائق بعد الوردية': item.minutesPastShift,
         'حالة الاحتساب': item.statusLabel,
         'ساعات الإضافي': item.otHours,
-        'المستحق (ج.م)': item.estimatedEgp,
+        'المدة': formatHoursAndMinutes(item.otHours),
       }));
       exportToExcel(
         data, 
@@ -685,7 +731,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>مركز التقارير المتقدمة وتحليلات الحضور</span>
               <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">
-                V 1.0.0
+                V 3.0.6
               </span>
             </h2>
             <p className="text-[11px] text-slate-400">
@@ -836,7 +882,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           }`}
         >
           <User className="w-3.5 h-3.5" />
-          <span>الملف الشامل للعامل (النقطة 12)</span>
+          <span>الملف الشامل للعامل</span>
         </button>
 
         <button
@@ -846,7 +892,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           }`}
         >
           <Timer className="w-3.5 h-3.5" />
-          <span>تقارير الإضافي المتقدمة (النقطة 13)</span>
+          <span>تقارير الإضافي المتقدمة</span>
         </button>
 
         <button
@@ -1024,20 +1070,49 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 text-xs">
-              <div className="flex items-center gap-2">
-                <label className="text-slate-300 font-medium">اختيار العامل:</label>
+            <div className="flex flex-wrap items-center gap-2.5 text-xs">
+              {/* Search Filter for Workers (Point 4) */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="بحث بالكود أو الاسم أو القسم..."
+                  value={dossierSearch}
+                  onChange={(e) => setDossierSearch(e.target.value)}
+                  className="bg-slate-950 border border-slate-700 rounded-lg pr-8 pl-6 py-1.5 text-xs text-white placeholder-slate-500 w-52 focus:w-60 focus:border-purple-500 transition-all font-sans"
+                />
+                {dossierSearch && (
+                  <button
+                    onClick={() => setDossierSearch('')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Sorted Worker Selector Dropdown (Point 4) */}
+              <div className="flex items-center gap-1.5">
                 <select
                   value={dossierWorkerCode}
                   onChange={(e) => setDossierWorkerCode(parseInt(e.target.value, 10))}
-                  className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-medium focus:border-purple-500 max-w-xs"
+                  className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-medium focus:border-purple-500 max-w-xs font-mono text-xs cursor-pointer"
                 >
-                  {workers.map((w) => (
-                    <option key={w.code} value={w.code}>
-                      #{w.code} - {w.name} ({w.department})
-                    </option>
-                  ))}
+                  {filteredDossierWorkers.length > 0 ? (
+                    filteredDossierWorkers.map((w) => (
+                      <option key={w.code} value={w.code}>
+                        #{w.code} - {w.name} ({w.department})
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">لا يوجد عامل مطابق للبحث</option>
+                  )}
                 </select>
+                {dossierSearch && (
+                  <span className="text-[10px] text-purple-400 font-mono bg-purple-950/60 px-1.5 py-1 rounded border border-purple-800/40">
+                    ({filteredDossierWorkers.length})
+                  </span>
+                )}
               </div>
 
               <button
@@ -1129,7 +1204,9 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                   <div className="text-xl font-bold font-mono text-cyan-400 mt-1">
                     {dossierSummary.totalOtHours} <span className="text-xs text-slate-400 font-sans">ساعة</span>
                   </div>
-                  <div className="text-[10px] text-emerald-400 font-mono mt-0.5 font-bold">~ {dossierSummary.estimatedPay} ج.م تقديري</div>
+                  <div className="text-[10px] text-cyan-300 font-mono mt-0.5 font-bold">
+                    {formatHoursAndMinutes(dossierSummary.totalOtHours)}
+                  </div>
                 </div>
 
                 <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80">
@@ -1267,8 +1344,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
               </div>
             </div>
 
-            {/* Overtime Policy Parameters (Point 13 Rule Adjustments) */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 pt-2 border-t border-slate-800/80 text-xs">
+            {/* Overtime Policy Parameters */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-2 border-t border-slate-800/80 text-xs">
               <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
                 <label className="text-slate-300 font-medium flex items-center justify-between">
                   <span>سماحية الانصراف العادي:</span>
@@ -1286,22 +1363,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                 </select>
                 <span className="text-[10px] text-slate-500 block">
                   من يبصم قبل 4:45 يعتبر خروج طبيعي ولا يحسب له إضافي
-                </span>
-              </div>
-
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
-                <label className="text-slate-300 font-medium flex items-center justify-between">
-                  <span>سعر ساعة الإضافي التقديري:</span>
-                  <span className="text-emerald-400 font-bold font-mono">{otHourlyRate} ج.م</span>
-                </label>
-                <input
-                  type="number"
-                  value={otHourlyRate}
-                  onChange={(e) => setOtHourlyRate(Math.max(1, parseInt(e.target.value, 10) || 35))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white font-mono"
-                />
-                <span className="text-[10px] text-slate-500 block">
-                  معدل الساعة لتقدير المستحقات المالية
                 </span>
               </div>
 
@@ -1342,22 +1403,16 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             </div>
           </div>
 
-          {/* Overtime Metric Summary Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {/* Overtime Metric Summary Cards (Hours and Minutes Only) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
               <span className="text-slate-400 text-[11px] block">إجمالي الساعات الإضافية بالمصنع</span>
               <span className="text-2xl font-bold font-mono text-amber-400 mt-1 block">
                 {totalOtFactoryHours} <span className="text-xs text-slate-400 font-sans">ساعة</span>
               </span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">خلال الفترة المحددة</span>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-              <span className="text-slate-400 text-[11px] block">إجمالي المستحق المالي التقديري</span>
-              <span className="text-2xl font-bold font-mono text-emerald-400 mt-1 block">
-                {totalOtEstimatedPay.toLocaleString()} <span className="text-xs text-slate-400 font-sans">ج.م</span>
+              <span className="text-[11px] text-amber-300/80 font-mono block mt-0.5 font-bold">
+                ({formatHoursAndMinutes(totalOtFactoryHours)})
               </span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">على أساس {otHourlyRate} ج.م / س</span>
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
@@ -1369,11 +1424,11 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-              <span className="text-slate-400 text-[11px] block">متوسط الإضافي لكل عامل</span>
+              <span className="text-slate-400 text-[11px] block">متوسط الإضافي لكل مستحق</span>
               <span className="text-2xl font-bold font-mono text-purple-400 mt-1 block">
                 {otWorkersCount > 0 ? (totalOtFactoryHours / otWorkersCount).toFixed(1) : 0} <span className="text-xs text-slate-400 font-sans">س/عامل</span>
               </span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">خلال فترة التقرير</span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">خلال الفترة المحددة</span>
             </div>
           </div>
 
@@ -1402,8 +1457,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                         <th className="py-2.5 px-3 text-center">أيام الإضافي</th>
                         <th className="py-2.5 px-3 text-center">إضافي وردية</th>
                         <th className="py-2.5 px-3 text-center">إضافي سهر/جمعة</th>
-                        <th className="py-2.5 px-3 text-center">الإجمالي (ساعة)</th>
-                        <th className="py-2.5 px-3 text-center">المستحق (ج.م)</th>
+                        <th className="py-2.5 px-3 text-center">إجمالي الإضافي</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -1420,10 +1474,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                           <td className="py-2 px-3 text-center text-slate-300">{item.shiftOtHours} س</td>
                           <td className="py-2 px-3 text-center text-indigo-400 font-bold">{item.fridayOtHours} س</td>
                           <td className="py-2 px-3 text-center text-amber-400 font-bold text-sm bg-amber-950/20">
-                            {item.totalOtHours} س
-                          </td>
-                          <td className="py-2 px-3 text-center text-emerald-400 font-bold bg-emerald-950/20">
-                            {item.estimatedPay.toLocaleString()} ج.م
+                            {formatHoursAndMinutes(item.totalOtHours)}
                           </td>
                         </tr>
                       ))}
@@ -1438,7 +1489,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             </div>
           )}
 
-          {/* VIEW 2: DETAILED DAILY PUNCHES (Point 13 Daily Trace) */}
+          {/* VIEW 2: DETAILED DAILY PUNCHES */}
           {otViewMode === 'detailed' && (
             <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
               <div className="p-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
@@ -1470,7 +1521,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                         <th className="py-2.5 px-3 text-center">بعد الوردية</th>
                         <th className="py-2.5 px-3">حالة البصمة والاحتساب</th>
                         <th className="py-2.5 px-3 text-center">الإضافي</th>
-                        <th className="py-2.5 px-3 text-center">المستحق</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -1505,13 +1555,10 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                           </td>
                           <td className="py-2 px-3 text-center font-bold">
                             {punch.otHours > 0 ? (
-                              <span className="text-cyan-400 font-mono">+{punch.otHours} س</span>
+                              <span className="text-cyan-400 font-mono">+{formatHoursAndMinutes(punch.otHours)}</span>
                             ) : (
                               <span className="text-slate-600">-</span>
                             )}
-                          </td>
-                          <td className="py-2 px-3 text-center text-emerald-400 font-bold">
-                            {punch.estimatedEgp > 0 ? `${punch.estimatedEgp} ج.م` : '-'}
                           </td>
                         </tr>
                       ))}

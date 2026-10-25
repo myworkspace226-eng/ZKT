@@ -58,14 +58,20 @@ export interface AttendanceRecord {
   deviceId: number;
   deviceName: string;
   punchType: PunchType;
+  verifyType?: number;
   isDuplicateIgnored?: boolean;
   duplicateGroup?: string;
+  duplicateReason?: string;
   isManual?: boolean;
+  isHROverride?: boolean;
   manualNote?: string;
   manualEditor?: string;
   isOvertime?: boolean;
   overtimeHours?: number;
   lateMinutes?: number;
+  isMissedPunch?: boolean;
+  missedPunchType?: 'IN' | 'OUT';
+  missedPunchReason?: string;
 }
 
 export interface ShiftRule {

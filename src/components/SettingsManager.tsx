@@ -235,7 +235,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">رقم إصدار البرنامج</span>
-              <span className="font-bold text-emerald-400 font-mono text-sm">V 1.0.0 (النسخة المستقرة)</span>
+              <span className="font-bold text-emerald-400 font-mono text-sm">V 3.0.6</span>
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">نمط العمل والاتصال</span>
