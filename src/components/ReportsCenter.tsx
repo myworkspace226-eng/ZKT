@@ -155,9 +155,17 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
   const presentWorkersList = useMemo(() => {
     return activeWorkers
-      .filter((w) => presentWorkerCodes.has(Number(w.code)))
+      .filter((w) => {
+        const direct = presentWorkerCodes.has(Number(w.code));
+        const alias = Boolean(w.aliasCodes && w.aliasCodes.some((ac) => presentWorkerCodes.has(Number(ac))));
+        return direct || alias;
+      })
       .map((w) => {
-        const workerPunches = recordsOnSelectedDay.filter((r) => Number(r.workerCode) === Number(w.code));
+        const workerPunches = recordsOnSelectedDay.filter(
+          (r) =>
+            Number(r.workerCode) === Number(w.code) ||
+            Boolean(w.aliasCodes && w.aliasCodes.includes(Number(r.workerCode)))
+        );
         workerPunches.sort((a, b) => (a.displayTime || '').localeCompare(b.displayTime || ''));
         const inPunch = workerPunches.find((r) => r.resolvedState === 'IN') || workerPunches[0];
         const outPunch = workerPunches.length > 1 ? workerPunches[workerPunches.length - 1] : undefined;
@@ -176,7 +184,11 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
   const absentWorkersList = useMemo(() => {
     return activeWorkers
-      .filter((w) => !presentWorkerCodes.has(Number(w.code)))
+      .filter((w) => {
+        const direct = presentWorkerCodes.has(Number(w.code));
+        const alias = Boolean(w.aliasCodes && w.aliasCodes.some((ac) => presentWorkerCodes.has(Number(ac))));
+        return !direct && !alias;
+      })
       .map((w) => {
         const override = absenceOverrides[w.code];
         const hasGatePass = gatePasses.find((g) => Number(g.workerCode) === Number(w.code) && g.date === selectedDay);

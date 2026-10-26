@@ -368,9 +368,19 @@ safeHandle('zkt-pull-users', async (event, { ip, port = 4370, timeout = 5000 }) 
         let rawName = u.name ? String(u.name) : '';
         let cleanName = fixMojibake(rawName).replace(/[\x00-\x1F\x7F]/g, '').trim();
 
+        // Strictly prioritize Employee Badge / User ID over internal RAM slot (uid)
+        let resolvedUserId = '';
+        if (u.userId !== undefined && u.userId !== null && String(u.userId).trim() !== '' && String(u.userId).trim() !== '0') {
+          resolvedUserId = String(u.userId).trim();
+        } else if (u.user_id !== undefined && u.user_id !== null && String(u.user_id).trim() !== '' && String(u.user_id).trim() !== '0') {
+          resolvedUserId = String(u.user_id).trim();
+        } else {
+          resolvedUserId = String(u.uid || idx + 1);
+        }
+
         return {
           uid: u.uid || idx + 1,
-          userId: String(u.userId || u.user_id || u.uid),
+          userId: resolvedUserId,
           name: cleanName, // Clean name or empty string to allow frontend name retention
           role: u.role || 0,
           cardno: u.cardno || 0,

@@ -292,20 +292,40 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
 
       if (onImportWorkers && res.users.length > 0) {
         const newWorkers: Worker[] = res.users.map((u, i) => {
-          const userCode = Number(u.userId) || 1000 + i;
+          // Strictly prioritize u.userId (Employee Code) as primary key, NOT internal slot uid
+          const userCode = Number(u.userId) || Number(u.uid) || (1000 + i);
           const cleanName = u.name ? u.name.trim() : '';
-          const existing = (workers || []).find((w) => w.code === userCode);
+          const existing = (workers || []).find((w) => w.code === userCode || (w.aliasCodes && w.aliasCodes.includes(userCode)));
 
-          // Point 2: Protect and prioritize the real name from device or existing database
-          const realName = (cleanName && !cleanName.startsWith('عامل كود'))
-            ? cleanName
-            : (existing?.name && !existing.name.startsWith('عامل كود') ? existing.name : (cleanName || `عامل #${userCode}`));
+          // Check if cleanName from machine is a genuine person name
+          const isCleanNameValid = Boolean(
+            cleanName &&
+            cleanName !== '' &&
+            !cleanName.startsWith('عامل #') &&
+            !cleanName.startsWith('عامل كود') &&
+            cleanName !== String(userCode) &&
+            cleanName.length > 1
+          );
+
+          // Check if existing worker in local database already has a genuine name
+          const existingHasRealName = Boolean(
+            existing?.name &&
+            !existing.name.startsWith('عامل #') &&
+            !existing.name.startsWith('عامل كود') &&
+            existing.name !== String(userCode) &&
+            existing.name.length > 1
+          );
+
+          // CRITICAL: If enrolled on machine B without name, PRESERVE the existing real name!
+          const realName = existingHasRealName
+            ? existing!.name
+            : (isCleanNameValid ? cleanName : (existing?.name || `عامل #${userCode}`));
 
           const isEnglish = /^[A-Za-z\s.'-]+$/.test(realName) && realName.length > 2;
 
           return {
-            id: existing ? existing.id : `w-zkt-${device.id}-${u.userId}-${i}`,
-            code: userCode,
+            id: existing ? existing.id : `w-zkt-${device.id}-${userCode}`,
+            code: existing ? existing.code : userCode,
             name: realName,
             department: existing?.department || device.department || 'إنتاج',
             line: existing?.line || 'خط 1',
@@ -315,8 +335,9 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
             customGraceMinutes: existing?.customGraceMinutes ?? 15,
             isActive: existing ? existing.isActive : true,
             assignedDeviceIds: Array.from(new Set([...(existing?.assignedDeviceIds || []), device.id])),
+            aliasCodes: existing?.aliasCodes || [],
             hasFingerprint: true,
-            hasFace: false,
+            hasFace: existing ? existing.hasFace : false,
             joinDate: existing?.joinDate || new Date().toISOString().slice(0, 10),
             isNameSyncedToDevice: Boolean(realName && !realName.startsWith('عامل #')),
             enrolledOnDeviceName: device.name,

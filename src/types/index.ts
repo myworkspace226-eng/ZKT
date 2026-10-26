@@ -34,6 +34,7 @@ export interface Worker {
   deactivationReason?: string;
   deactivationDate?: string;
   assignedDeviceIds: number[];
+  aliasCodes?: number[];
   hasFingerprint: boolean;
   hasFace: boolean;
   phone?: string;

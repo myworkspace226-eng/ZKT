@@ -265,9 +265,12 @@ export default function App() {
           const userCodeClean = String(r.userId || '').trim().replace(/^0+/, '');
           const matchedWorker = workers.find((w) => {
             const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
-            return w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
+            const isDirectMatch = w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
+            const isAliasMatch = Boolean(w.aliasCodes && (w.aliasCodes.includes(userCodeNum) || w.aliasCodes.some((ac) => String(ac).trim() === String(r.userId).trim())));
+            return isDirectMatch || isAliasMatch;
           });
 
+          const canonicalCode = matchedWorker ? matchedWorker.code : userCodeNum;
           const realWorkerName = matchedWorker 
             ? matchedWorker.name 
             : `موظف #${r.userId}`;
@@ -289,7 +292,7 @@ export default function App() {
 
           return {
             id: `REC-${d.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
-            workerCode: userCodeNum,
+            workerCode: canonicalCode,
             workerName: realWorkerName,
             department: matchedWorker ? matchedWorker.department : d.department,
             timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
@@ -384,9 +387,12 @@ export default function App() {
         const userCodeClean = String(r.userId || '').trim().replace(/^0+/, '');
         const matchedWorker = workers.find((w) => {
           const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
-          return w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
+          const isDirectMatch = w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
+          const isAliasMatch = Boolean(w.aliasCodes && (w.aliasCodes.includes(userCodeNum) || w.aliasCodes.some((ac) => String(ac).trim() === String(r.userId).trim())));
+          return isDirectMatch || isAliasMatch;
         });
 
+        const canonicalCode = matchedWorker ? matchedWorker.code : userCodeNum;
         const realWorkerName = matchedWorker 
           ? matchedWorker.name 
           : `موظف #${r.userId}`;
@@ -408,7 +414,7 @@ export default function App() {
 
         return {
           id: `REC-${target.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
-          workerCode: userCodeNum,
+          workerCode: canonicalCode,
           workerName: realWorkerName,
           department: matchedWorker ? matchedWorker.department : target.department,
           timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
@@ -514,6 +520,77 @@ export default function App() {
     setAttendanceRecords((prev) => prev.filter((r) => r.workerCode !== workerCode));
     setLiveSessionRecords((prev) => prev.filter((r) => r.workerCode !== workerCode));
     showNotification(`🗑️ تم مسح بيانات وسجلات العامل (كود #${workerCode}) محلياً من البرنامج بنجاح.`);
+  };
+
+  // Safe Merge Workers & Punch Aliasing (Smart Worker Duplicate Resolver)
+  const handleMergeWorkers = (primaryCode: number, aliasCode: number) => {
+    const primaryWorker = workers.find((w) => w.code === primaryCode);
+    const aliasWorker = workers.find((w) => w.code === aliasCode);
+
+    if (!primaryWorker || !aliasWorker) {
+      showNotification('❌ تعذر العثور على أحد العاملين لإتمام عملية الدمج.');
+      return;
+    }
+
+    if (primaryCode === aliasCode) {
+      showNotification('⚠️ لا يمكن دمج الكود مع نفسه.');
+      return;
+    }
+
+    const mergedAliases = Array.from(
+      new Set([...(primaryWorker.aliasCodes || []), aliasCode, ...(aliasWorker.aliasCodes || [])])
+    );
+    const mergedDevices = Array.from(
+      new Set([...(primaryWorker.assignedDeviceIds || []), ...(aliasWorker.assignedDeviceIds || [])])
+    );
+
+    // 1. Update primary worker with combined aliases and devices, remove alias worker from local database
+    setWorkers((prev) =>
+      prev
+        .filter((w) => w.code !== aliasCode)
+        .map((w) =>
+          w.code === primaryCode
+            ? {
+                ...w,
+                aliasCodes: mergedAliases,
+                assignedDeviceIds: mergedDevices,
+                hasFingerprint: w.hasFingerprint || aliasWorker.hasFingerprint,
+                hasFace: w.hasFace || aliasWorker.hasFace,
+              }
+            : w
+        )
+    );
+
+    // 2. Re-point all punches from aliasCode to primaryCode
+    setAttendanceRecords((prev) =>
+      prev.map((r) =>
+        r.workerCode === aliasCode
+          ? {
+              ...r,
+              workerCode: primaryCode,
+              workerName: primaryWorker.name,
+              department: primaryWorker.department,
+            }
+          : r
+      )
+    );
+
+    setLiveSessionRecords((prev) =>
+      prev.map((r) =>
+        r.workerCode === aliasCode
+          ? {
+              ...r,
+              workerCode: primaryCode,
+              workerName: primaryWorker.name,
+              department: primaryWorker.department,
+            }
+          : r
+      )
+    );
+
+    showNotification(
+      `✅ تم دمج كود #${aliasCode} كـ Alias للعامل [${primaryWorker.name} - كود #${primaryCode}] بنجاح ونقل كافة الحركات والسجلات!`
+    );
   };
 
   // 6. Update Shift Rule
@@ -762,7 +839,7 @@ export default function App() {
                 onImportWorkers={(newWorkers) => {
                   setWorkers((prev) => {
                     const workerMap = new Map<number, Worker>();
-                    // Populate existing workers first
+                    // Populate existing workers first indexed by code
                     for (const w of prev) {
                       workerMap.set(Number(w.code), { ...w });
                     }
@@ -771,29 +848,55 @@ export default function App() {
                       const code = Number(nw.code);
                       if (!code) continue;
 
-                      const existing = workerMap.get(code);
+                      // Check if exists either by primary code or as an alias
+                      let existing = workerMap.get(code);
+                      if (!existing) {
+                        for (const [, existingW] of workerMap.entries()) {
+                          if (existingW.aliasCodes && existingW.aliasCodes.includes(code)) {
+                            existing = existingW;
+                            break;
+                          }
+                        }
+                      }
+
                       if (existing) {
                         const mergedDeviceIds = Array.from(
                           new Set([...(existing.assignedDeviceIds || []), ...(nw.assignedDeviceIds || [])])
                         );
-                        const hasRealName = Boolean(
+                        
+                        // Check if nw.name from machine is a genuine name
+                        const isNewNameValid = Boolean(
                           nw.name && 
-                          !nw.name.startsWith('عامل كود #') && 
+                          nw.name.trim() !== '' && 
+                          !nw.name.startsWith('عامل #') && 
                           !nw.name.startsWith('عامل كود') &&
+                          nw.name.trim() !== String(code) &&
                           nw.name.trim().length > 1
                         );
-                        const finalName = hasRealName ? nw.name.trim() : existing.name;
+
+                        // Check if existing worker in local database already has a genuine name
+                        const existingHasRealName = Boolean(
+                          existing.name &&
+                          !existing.name.startsWith('عامل #') &&
+                          !existing.name.startsWith('عامل كود') &&
+                          existing.name.trim() !== String(existing.code) &&
+                          existing.name.trim().length > 1
+                        );
+
+                        // CRITICAL: Protect existing real name if incoming is empty/generic from secondary machine
+                        const finalName = existingHasRealName ? existing.name : (isNewNameValid ? nw.name.trim() : existing.name);
                         const isEnglishName = /^[A-Za-z\s.'-]+$/.test(finalName) && finalName.length > 2;
 
-                        workerMap.set(code, {
+                        workerMap.set(existing.code, {
                           ...existing,
                           name: finalName,
                           assignedDeviceIds: mergedDeviceIds,
                           enrolledOnDeviceName: nw.enrolledOnDeviceName || existing.enrolledOnDeviceName,
                           nationality: isEnglishName ? 'بنغلاديشي' : (existing.nationality || 'مصري'),
                           shiftId: isEnglishName ? 'bangladeshi' : (existing.shiftId || 'standard'),
-                          isNameSyncedToDevice: true,
-                          hasFingerprint: true,
+                          isNameSyncedToDevice: existingHasRealName || isNewNameValid,
+                          hasFingerprint: existing.hasFingerprint || nw.hasFingerprint,
+                          hasFace: existing.hasFace || nw.hasFace,
                         });
                       } else {
                         const isEnglishName = /^[A-Za-z\s.'-]+$/.test(nw.name) && nw.name.length > 2;
@@ -810,7 +913,7 @@ export default function App() {
 
                     return Array.from(workerMap.values()).sort((a, b) => a.code - b.code);
                   });
-                  showNotification(`✅ تم سحب وتحديث بيانات العمال في قاعدة البيانات بنجاح (المفتاح الأساسي: كود العامل).`);
+                  showNotification(`✅ تم سحب وتحديث بيانات العمال في قاعدة البيانات بنجاح (المفتاح الأساسي: UserId).`);
                 }}
                 onResetMockData={handleResetMockData}
               />
@@ -835,6 +938,7 @@ export default function App() {
                 onUpdateWorker={handleUpdateWorker}
                 onAddWorker={handleAddWorker}
                 onDeleteWorker={handleDeleteWorker}
+                onMergeWorkers={handleMergeWorkers}
               />
             )}
 

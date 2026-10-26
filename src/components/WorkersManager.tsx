@@ -29,12 +29,28 @@ import * as XLSX from 'xlsx';
 import { Worker, Device } from '../types';
 import { exportToExcel } from '../utils/attendanceEngine';
 
+// Helper to normalize Arabic names for duplicate detection
+export function normalizeArabicText(text: string): string {
+  if (!text) return '';
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/[ىي]/g, 'ي')
+    .replace(/عبد\s+/g, 'عبد')
+    .replace(/[\s\-_.]+/g, ' ')
+    .trim();
+}
+
 interface WorkersManagerProps {
   workers: Worker[];
   devices: Device[];
   onUpdateWorker: (worker: Worker) => void;
   onAddWorker: (worker: Worker) => void;
   onDeleteWorker?: (workerCode: number) => void;
+  onMergeWorkers?: (primaryCode: number, aliasCode: number) => void;
 }
 
 export const WorkersManager: React.FC<WorkersManagerProps> = ({
@@ -43,6 +59,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   onUpdateWorker,
   onAddWorker,
   onDeleteWorker,
+  onMergeWorkers,
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'active' | 'frozen' | 'pendingSync'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -57,6 +74,12 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   const [transferringWorker, setTransferringWorker] = useState<Worker | null>(null);
   const [newDepartment, setNewDepartment] = useState<string>('تعبئة وتغليف');
   const [newLine, setNewLine] = useState<string>('');
+
+  // Duplicate Resolver Modal State (Smart Worker Merge)
+  const [showDuplicateModal, setShowDuplicateModal] = useState<boolean>(false);
+  const [selectedPrimaryMap, setSelectedPrimaryMap] = useState<Record<string, number>>({});
+  const [manualPrimaryCode, setManualPrimaryCode] = useState<number | ''>('');
+  const [manualAliasCode, setManualAliasCode] = useState<number | ''>('');
 
   // Edit Worker Modal State (Point 6)
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
@@ -92,6 +115,38 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   const [syncTargetDeviceId, setSyncTargetDeviceId] = useState<number | 'all'>('all');
   const [isSyncingProcess, setIsSyncingProcess] = useState<boolean>(false);
   const [customEnrolledCode, setCustomEnrolledCode] = useState<string>('');
+
+  // Smart Duplicate Worker Detection (Groups workers with identical normalized names but different codes)
+  const duplicateGroups = useMemo(() => {
+    const map = new Map<string, Worker[]>();
+    for (const w of workers) {
+      if (!w.name) continue;
+      const cleanName = w.name.trim();
+      if (cleanName.startsWith('عامل #') || cleanName.startsWith('عامل كود') || cleanName.startsWith('موظف #')) {
+        continue;
+      }
+      const norm = normalizeArabicText(cleanName);
+      if (norm.length < 3) continue;
+
+      const group = map.get(norm) || [];
+      group.push(w);
+      map.set(norm, group);
+    }
+
+    const duplicates: { normalizedKey: string; sampleName: string; workers: Worker[] }[] = [];
+    map.forEach((wList, key) => {
+      const distinctCodes = new Set(wList.map((w) => w.code));
+      if (distinctCodes.size > 1) {
+        duplicates.push({
+          normalizedKey: key,
+          sampleName: wList[0].name,
+          workers: wList,
+        });
+      }
+    });
+
+    return duplicates;
+  }, [workers]);
 
   const isAdministrativeDept = useMemo(() => {
     const adminDepts = ['إدارة', 'الإدارة', 'حسابات', 'مشتريات', 'أمن', 'صيانة', 'مخازن', 'نظافة', 'بوفيه'];
@@ -497,6 +552,21 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
             <span>ضبط ورديات البنغال تلقائياً</span>
           </button>
 
+          {/* Smart Duplicate Names & Code Merger Button (Point 3) */}
+          <button
+            onClick={() => setShowDuplicateModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-xs font-medium border border-indigo-500/30 transition-colors cursor-pointer relative"
+            title="فحص تشابه الأسماء وتوحيد الأكواد البديلة"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 text-indigo-400" />
+            <span>فحص الأسماء المكررة ودمج الأكواد</span>
+            {duplicateGroups.length > 0 && (
+              <span className="bg-amber-500 text-slate-950 font-mono text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                {duplicateGroups.length}
+              </span>
+            )}
+          </button>
+
           <button
             onClick={() => setShowAddWorkerModal(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors cursor-pointer"
@@ -611,7 +681,14 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
               <tbody className="divide-y divide-slate-800/60 font-sans">
                 {filteredWorkers.map((worker) => (
                   <tr key={worker.id} className="hover:bg-slate-850 transition-colors">
-                    <td className="py-2 px-3 font-mono font-bold text-white">{worker.code}</td>
+                    <td className="py-2 px-3 font-mono font-bold text-white">
+                      <div>{worker.code}</div>
+                      {worker.aliasCodes && worker.aliasCodes.length > 0 && (
+                        <div className="text-[9px] text-amber-400 font-normal font-sans" title="أكواد بديلة مدمجة">
+                          (بديل: #{worker.aliasCodes.join(', #')})
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2 px-3 font-medium text-white">{worker.name}</td>
                     <td className="py-2 px-3 text-slate-300">{worker.department}</td>
                     <td className="py-2 px-3 text-slate-400 font-mono">
@@ -1476,6 +1553,203 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>تأكيد الحذف المحلي</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Smart Duplicate Names & Code Merger Modal */}
+      {showDuplicateModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-2xl w-full p-5 space-y-4 shadow-2xl my-6">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-400">
+                  <ArrowRightLeft className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">فحص وتوحيد الأسماء المكررة (Smart Duplicate Resolver)</h3>
+                  <p className="text-[11px] text-slate-400">حل مشكلة تكرار العمال عبر الماكينات وربط الأكواد البديلة (Aliases)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDuplicateModal(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Explanation & Safety Notice */}
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2 text-xs">
+              <div className="flex items-center gap-2 text-indigo-300 font-semibold">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>كيف يعمل دمج الأكواد الذكي؟</span>
+              </div>
+              <p className="text-slate-300 text-[11px] leading-relaxed">
+                إذا تم تسجيل العامل بكودين مختلفين على ماكينتين عن طريق الخطأ (مثلاً كود 15 وكود 18 لنفس الاسم)، يمكنك هنا اختيار <strong>الكود الأساسي</strong> واعتماد الكود الآخر كـ <strong>Alias</strong>. سيقوم البرنامج بنقل كافة البصمات والحركات أوتوماتيكياً للكود الأساسي، مع حذف السجل المكرر <strong>محلياً فقط دون أي مساس بجهاز البصمة</strong>.
+              </p>
+            </div>
+
+            {/* Detected Duplicate Groups */}
+            <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+              {duplicateGroups.length > 0 ? (
+                duplicateGroups.map((group) => {
+                  const currentPrimary = selectedPrimaryMap[group.normalizedKey] || group.workers[0].code;
+                  const aliasCandidates = group.workers.filter((w) => w.code !== currentPrimary);
+
+                  return (
+                    <div key={group.normalizedKey} className="bg-slate-950/80 border border-amber-500/30 rounded-lg p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-white text-xs flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                          <span>اسم مشترك: {group.sampleName}</span>
+                        </span>
+                        <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded font-medium">
+                          {group.workers.length} سجلات بأكواد مختلفة
+                        </span>
+                      </div>
+
+                      <div className="space-y-2">
+                        <p className="text-[11px] text-slate-400">اختر الكود الأساسي (سيتم تحويل الأكواد الأخرى لأكواد بديلة):</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {group.workers.map((w) => {
+                            const isSelected = currentPrimary === w.code;
+                            return (
+                              <label
+                                key={w.code}
+                                onClick={() => setSelectedPrimaryMap((prev) => ({ ...prev, [group.normalizedKey]: w.code }))}
+                                className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-xs cursor-pointer transition-all ${
+                                  isSelected 
+                                    ? 'bg-indigo-950/40 border-indigo-500 text-white' 
+                                    : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                                }`}
+                              >
+                                <input
+                                  type="radio"
+                                  name={`primary-${group.normalizedKey}`}
+                                  checked={isSelected}
+                                  onChange={() => setSelectedPrimaryMap((prev) => ({ ...prev, [group.normalizedKey]: w.code }))}
+                                  className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
+                                />
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono font-bold text-cyan-300">كود #{w.code}</span>
+                                    {isSelected && (
+                                      <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1 py-0.2 rounded font-semibold">
+                                        أساسي
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-slate-300">{w.name}</div>
+                                  <div className="text-[10px] text-slate-400">{w.department} | {w.nationality}</div>
+                                  {w.aliasCodes && w.aliasCodes.length > 0 && (
+                                    <div className="text-[10px] text-amber-400">أكواد بديلة حالية: #{w.aliasCodes.join(', #')}</div>
+                                  )}
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end pt-2 border-t border-slate-800/80">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!onMergeWorkers) return;
+                            for (const aliasW of aliasCandidates) {
+                              onMergeWorkers(currentPrimary, aliasW.code);
+                            }
+                            setNotification(`✅ تم بنجاح اعتماد كود #${currentPrimary} ككود أساسي ودمج باقي الأكواد ونقل حركاتها.`);
+                            setTimeout(() => setNotification(null), 6000);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                        >
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                          <span>اعتماد ودمج السجلات في كود #{currentPrimary}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="bg-emerald-950/20 border border-emerald-800/40 rounded-lg p-4 text-center space-y-1.5">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto" />
+                  <p className="text-xs font-bold text-emerald-300">لا توجد أي أسماء مكررة بأكواد مختلفة حالياً!</p>
+                  <p className="text-[11px] text-slate-400">جميع العاملين مسجلون بأكواد فريدة ومنسقة بين البرنامج والماكينات.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Manual Merge Section */}
+            <div className="bg-slate-950 p-3.5 rounded-lg border border-slate-800 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                <Tag className="w-3.5 h-3.5 text-indigo-400" />
+                <span>دمج يدوي مخصص (دمج كودين مختلفين باختيارك):</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1">الكود الأساسي (الذي سيتم الإبقاء عليه):</label>
+                  <select
+                    value={manualPrimaryCode}
+                    onChange={(e) => setManualPrimaryCode(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono"
+                  >
+                    <option value="">-- اختر العامل الأساسي --</option>
+                    {workers.map((w) => (
+                      <option key={w.code} value={w.code}>
+                        #{w.code} - {w.name} ({w.department})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1">الكود المراد دمجه كـ Alias (سيتم نقل حركاته وحذفه محلياً):</label>
+                  <select
+                    value={manualAliasCode}
+                    onChange={(e) => setManualAliasCode(e.target.value === '' ? '' : Number(e.target.value))}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-mono"
+                  >
+                    <option value="">-- اختر الكود المراد دمجه --</option>
+                    {workers
+                      .filter((w) => w.code !== manualPrimaryCode)
+                      .map((w) => (
+                        <option key={w.code} value={w.code}>
+                          #{w.code} - {w.name} ({w.department})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  disabled={!manualPrimaryCode || !manualAliasCode || manualPrimaryCode === manualAliasCode}
+                  onClick={() => {
+                    if (manualPrimaryCode && manualAliasCode && onMergeWorkers) {
+                      onMergeWorkers(Number(manualPrimaryCode), Number(manualAliasCode));
+                      setManualPrimaryCode('');
+                      setManualAliasCode('');
+                    }
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  <span>دمج الكودين ونقل الحركات الآن</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowDuplicateModal(false)}
+                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer font-medium"
+              >
+                إغلاق
               </button>
             </div>
           </div>

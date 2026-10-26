@@ -167,11 +167,8 @@ export function processSmartAttendanceLogs(
         curDate.setDate(curDate.getDate() - 1);
         const prevDayStr = curDate.toISOString().slice(0, 10);
 
-        // Did this worker have punches on the previous day?
-        const prevDayPunches = dayPunchesMap.get(prevDayStr);
-        if (prevDayPunches && prevDayPunches.length > 0) {
-          targetWorkDay = prevDayStr;
-        }
+        // Any punch between 00:00 and overnightCutoff (e.g. 06:00 AM) belongs to the night shift of the previous day
+        targetWorkDay = prevDayStr;
       }
 
       let dList = dayPunchesMap.get(targetWorkDay);
