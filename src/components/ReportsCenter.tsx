@@ -137,37 +137,49 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   const factoryStrength = activeWorkers.length;
 
   const recordsOnSelectedDay = useMemo(() => {
-    return attendanceRecords.filter((r) => r.timestamp.slice(0, 10) === selectedDay && !r.isDuplicateIgnored);
+    return attendanceRecords.filter((r) => {
+      if (r.isDuplicateIgnored) return false;
+      const recDate = r.displayDate || (r.timestamp ? r.timestamp.slice(0, 10) : '');
+      return recDate === selectedDay;
+    });
   }, [attendanceRecords, selectedDay]);
 
   const presentWorkerCodes = useMemo(() => {
-    return new Set(
-      recordsOnSelectedDay
-        .filter((r) => r.resolvedState === 'IN')
-        .map((r) => r.workerCode)
-    );
+    // If a worker has ANY valid punch on this selected day, they are 100% present and NOT absent!
+    const codes = new Set<number>();
+    recordsOnSelectedDay.forEach((r) => {
+      if (r.workerCode) codes.add(Number(r.workerCode));
+    });
+    return codes;
   }, [recordsOnSelectedDay]);
 
   const presentWorkersList = useMemo(() => {
     return activeWorkers
-      .filter((w) => presentWorkerCodes.has(w.code))
+      .filter((w) => presentWorkerCodes.has(Number(w.code)))
       .map((w) => {
-        const punch = recordsOnSelectedDay.find((r) => r.workerCode === w.code && r.resolvedState === 'IN');
+        const workerPunches = recordsOnSelectedDay.filter((r) => Number(r.workerCode) === Number(w.code));
+        workerPunches.sort((a, b) => (a.displayTime || '').localeCompare(b.displayTime || ''));
+        const inPunch = workerPunches.find((r) => r.resolvedState === 'IN') || workerPunches[0];
+        const outPunch = workerPunches.length > 1 ? workerPunches[workerPunches.length - 1] : undefined;
+
         return {
           ...w,
-          checkInTime: punch ? punch.displayTime : '08:00',
-          deviceName: punch ? punch.deviceName : 'ماكينة البصمة',
-          lateMinutes: punch?.lateMinutes || 0,
+          checkInTime: inPunch ? inPunch.displayTime : '08:00',
+          checkOutTime: outPunch ? outPunch.displayTime : undefined,
+          deviceName: inPunch ? inPunch.deviceName : 'ماكينة البصمة',
+          lateMinutes: inPunch?.lateMinutes || 0,
+          isEarlyDeparture: Boolean(outPunch?.isEarlyDeparture),
+          earlyDepartureMinutes: outPunch?.earlyDepartureMinutes || 0,
         };
       });
   }, [activeWorkers, presentWorkerCodes, recordsOnSelectedDay]);
 
   const absentWorkersList = useMemo(() => {
     return activeWorkers
-      .filter((w) => !presentWorkerCodes.has(w.code))
+      .filter((w) => !presentWorkerCodes.has(Number(w.code)))
       .map((w) => {
         const override = absenceOverrides[w.code];
-        const hasGatePass = gatePasses.find((g) => g.workerCode === w.code && g.date === selectedDay);
+        const hasGatePass = gatePasses.find((g) => Number(g.workerCode) === Number(w.code) && g.date === selectedDay);
 
         let defaultCat: AbsenceCategory = 'unexcused';
         let defaultNote = '';
@@ -731,7 +743,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>مركز التقارير المتقدمة وتحليلات الحضور</span>
               <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">
-                V 3.0.6
+                V 4.0.0
               </span>
             </h2>
             <p className="text-[11px] text-slate-400">

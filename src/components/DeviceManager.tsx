@@ -85,6 +85,10 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
+  // Upload Workers Confirmation State
+  const [deviceToUploadWorkers, setDeviceToUploadWorkers] = useState<Device | null>(null);
+  const [isUploadingWorkers, setIsUploadingWorkers] = useState<boolean>(false);
+
   // Secure Memory Wipe State
   const [deviceToWipe, setDeviceToWipe] = useState<Device | null>(null);
   const [wipeConfirmText, setWipeConfirmText] = useState<string>('');
@@ -613,9 +617,9 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                 {/* Row 2: Upload/Download Users & Wipe Cache */}
                 <div className="grid grid-cols-3 gap-1.5">
                   <button
-                    onClick={() => handleQuickUploadUsers(device)}
+                    onClick={() => setDeviceToUploadWorkers(device)}
                     className="py-1 px-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/50 transition-colors cursor-pointer text-[10px] flex items-center justify-center gap-1 truncate"
-                    title="رفع بيانات وبصمات المستخدمين لهذه الماكينة"
+                    title="رفع وتثبيت بيانات العمال المسجلين لهذه الماكينة"
                   >
                     <UploadCloud className="w-3 h-3 text-blue-400 shrink-0" />
                     <span className="truncate">رفع عمال</span>
@@ -973,6 +977,79 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                   <>
                     <DatabaseZap className="w-3.5 h-3.5" />
                     <span>تأكيد تفريغ الذاكرة الآن</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Workers Confirmation Modal */}
+      {deviceToUploadWorkers && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-blue-900/60 rounded-xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-400">
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">تأكيد رفع وتثبيت بيانات العمال</h3>
+                  <p className="text-[11px] text-slate-400">{deviceToUploadWorkers.name} ({deviceToUploadWorkers.ip})</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDeviceToUploadWorkers(null)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="bg-blue-950/30 border border-blue-800/40 rounded-lg p-3 text-slate-300 space-y-2 leading-relaxed">
+                <p className="font-semibold text-blue-300">
+                  أنت على وشك إرسال بيانات <span className="text-white font-bold">{workers.length}</span> عامل مسجل في البرنامج إلى ماكينة <span className="text-white font-bold">({deviceToUploadWorkers.name})</span>.
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-300 pr-1">
+                  <li>سيتم تثبيت أسماء العمال وأكوادهم (User ID) على الماكينة لتظهر أسماؤهم عند البصم.</li>
+                  <li><strong className="text-emerald-400">لن يتم مسح أي بصمات مسجلة بالفعل</strong> على الماكينة.</li>
+                  <li>يمنع هذا الإجراء التعديل غير المقصود على أجهزة البصمة.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeviceToUploadWorkers(null)}
+                disabled={isUploadingWorkers}
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!deviceToUploadWorkers) return;
+                  setIsUploadingWorkers(true);
+                  await handleQuickUploadUsers(deviceToUploadWorkers);
+                  setIsUploadingWorkers(false);
+                  setDeviceToUploadWorkers(null);
+                }}
+                disabled={isUploadingWorkers}
+                className="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                {isUploadingWorkers ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>جاري الرفع للماكينة...</span>
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    <span>تأكيد وبدء الرفع الآن</span>
                   </>
                 )}
               </button>

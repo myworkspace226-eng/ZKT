@@ -30,6 +30,7 @@ interface AttendanceLogsProps {
   records: AttendanceRecord[];
   workers: Worker[];
   devices: Device[];
+  shiftEndTime?: string;
   onAddManualRecord: (record: AttendanceRecord) => void;
   onUpdateRecord?: (record: AttendanceRecord) => void;
   onDeleteRecord?: (id: string) => void;
@@ -41,6 +42,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   records,
   workers,
   devices,
+  shiftEndTime = '16:30',
   onAddManualRecord,
   onUpdateRecord,
   onDeleteRecord,
@@ -95,7 +97,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
   // Smart Attendance Processing (1-hour cooldown deduplication, 1st & last punch, overnight shifts, missed punches)
   const { smartRecords, detectedDuplicatesCount, missedPunchesCount } = useMemo(() => {
-    const processed = processSmartAttendanceLogs(records);
+    const processed = processSmartAttendanceLogs(records, { shiftEndTime });
     let dupCount = 0;
     let missedCount = 0;
 
@@ -610,13 +612,20 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                       {record.displayTime}
                     </td>
                     <td className="py-2 px-3 text-center">
-                      <span className={`text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block ${
-                        record.resolvedState === 'IN'
-                          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                          : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-                      }`}>
-                        {record.resolvedState === 'IN' ? 'حضور' : 'انصراف'}
-                      </span>
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className={`text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block ${
+                          record.resolvedState === 'IN'
+                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                        }`}>
+                          {record.resolvedState === 'IN' ? 'حضور' : 'انصراف'}
+                        </span>
+                        {record.isEarlyDeparture && (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={record.earlyDepartureReason}>
+                            انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2 px-3 text-center">
                       {record.punchType === 'FACE' ? (

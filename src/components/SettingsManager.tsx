@@ -3,16 +3,17 @@ import {
   Settings, 
   Building2, 
   Clock, 
-  Calendar, 
-  ShieldCheck, 
   Database, 
   Download, 
   Upload, 
   Save, 
-  RotateCcw,
-  CheckCircle2,
-  AlertTriangle,
-  Server
+  RotateCcw, 
+  CheckCircle2, 
+  AlertTriangle, 
+  Server,
+  ShieldCheck,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { FactorySettings } from '../types';
 
@@ -38,7 +39,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateSettings(formData);
-    setNotification('تم حفظ إعدادات النظام والمصنع بنجاح.');
+    setNotification('تم حفظ إعدادات النظام ومواعيد الورديات بنجاح.');
     setTimeout(() => setNotification(null), 4000);
   };
 
@@ -67,20 +68,23 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             <span>{notification}</span>
           </div>
-          <button onClick={() => setNotification(null)} className="text-slate-500 hover:text-white">✕</button>
+          <button onClick={() => setNotification(null)} className="text-slate-500 hover:text-white cursor-pointer">✕</button>
         </div>
       )}
 
       {/* Header */}
-      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 flex items-center justify-between">
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 flex items-center justify-between shadow-lg">
         <div className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center">
             <Settings className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-white">إعدادات النظام وسياسات العمل</h2>
+            <h2 className="text-sm font-bold text-white flex items-center gap-2">
+              <span>إعدادات النظام ومواعيد العمل</span>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">V 4.0.0</span>
+            </h2>
             <p className="text-[11px] text-slate-400">
-              تخصيص هوية المصنع والفرع، مضاعفات الإضافي والجمعة والعطلات، والنسخ الاحتياطي
+              تخصيص هوية المصنع، مواعيد الورديات وفترات السماح والانصراف المبكر، والنسخ الاحتياطي
             </p>
           </div>
         </div>
@@ -127,57 +131,131 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </div>
         </div>
 
-
-        {/* Section 3: Overtime & Friday Multipliers */}
+        {/* Section 2: Shift Timings & Attendance Engine Policies (Point 8) */}
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-3">
-          <div className="flex items-center gap-2 text-white font-bold text-xs pb-2 border-b border-slate-800">
-            <Calendar className="w-4 h-4 text-emerald-400" />
-            <span>مضاعفات الإضافي والجمعة والعطلات الرسمية</span>
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+            <div className="flex items-center gap-2 text-white font-bold text-xs">
+              <Clock className="w-4 h-4 text-emerald-400" />
+              <span>مواعيد العمل والورديات وسياسات الحضور (Attendance Engine)</span>
+            </div>
+            <span className="text-[10px] text-slate-400 font-mono">
+              يقرأ محرك البصمات هذه المتغيرات تلقائياً
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-            <div className="space-y-1">
-              <label className="text-slate-300 font-medium">مضاعف يوم الجمعة (اليوم بيومين)</label>
-              <input
-                type="number"
-                step="0.1"
-                min="1"
-                value={formData.fridayMultiplier}
-                onChange={(e) => setFormData({ ...formData, fridayMultiplier: parseFloat(e.target.value) || 2.0 })}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
-                required
-              />
+          {/* Standard Shift */}
+          <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+              <Sun className="w-3.5 h-3.5" />
+              <span>الوردية العادية (المصريين)</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-300">موعد بداية الوردية (الحضور)</label>
+                <input
+                  type="time"
+                  value={formData.standardShiftStart || '08:00'}
+                  onChange={(e) => setFormData({ ...formData, standardShiftStart: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white font-mono focus:border-blue-500"
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-slate-300">موعد نهاية الوردية (الانصراف)</label>
+                <input
+                  type="time"
+                  value={formData.standardShiftEnd || '16:30'}
+                  onChange={(e) => setFormData({ ...formData, standardShiftEnd: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white font-mono focus:border-blue-500"
+                  required
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Bengali Shift */}
+          <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-cyan-300">
+              <Clock className="w-3.5 h-3.5" />
+              <span>وردية العمالة البنغلاديشية</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-300">موعد بداية الوردية</label>
+                <input
+                  type="time"
+                  value={formData.bangladeshiShiftStart || '08:00'}
+                  onChange={(e) => setFormData({ ...formData, bangladeshiShiftStart: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white font-mono focus:border-blue-500"
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-slate-300">موعد نهاية الوردية</label>
+                <input
+                  type="time"
+                  value={formData.bangladeshiShiftEnd || '18:30'}
+                  onChange={(e) => setFormData({ ...formData, bangladeshiShiftEnd: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white font-mono focus:border-blue-500"
+                  required
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Policies & Windows */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+            <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
+              <label className="text-slate-300 font-medium block">فترة السماح العامة للتأخير</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="60"
+                  value={formData.defaultGraceMinutes ?? 15}
+                  onChange={(e) => setFormData({ ...formData, defaultGraceMinutes: parseInt(e.target.value, 10) || 0 })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white font-mono text-center focus:border-blue-500"
+                />
+                <span className="text-slate-400 text-[11px] shrink-0">دقيقة</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">بعدها يُحتسب التأخير</span>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-slate-300 font-medium">مضاعف الإضافي النهاري (بعد الوردية)</label>
-              <input
-                type="number"
-                step="0.1"
-                min="1"
-                value={formData.regularOvertimeMultiplier}
-                onChange={(e) => setFormData({ ...formData, regularOvertimeMultiplier: parseFloat(e.target.value) || 1.5 })}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
-                required
-              />
+            <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
+              <label className="text-slate-300 font-medium block">نافذة الانصراف المبكر</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  value={formData.earlyDepartureWindowMinutes ?? 30}
+                  onChange={(e) => setFormData({ ...formData, earlyDepartureWindowMinutes: parseInt(e.target.value, 10) || 0 })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white font-mono text-center focus:border-blue-500"
+                />
+                <span className="text-slate-400 text-[11px] shrink-0">دقيقة</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">مثال: 30 د (من 16:00 إلى 16:30)</span>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-slate-300 font-medium">مضاعف السهر والمبيت الليلي</label>
-              <input
-                type="number"
-                step="0.1"
-                min="1"
-                value={formData.nightOvertimeMultiplier}
-                onChange={(e) => setFormData({ ...formData, nightOvertimeMultiplier: parseFloat(e.target.value) || 2.0 })}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
-                required
-              />
+            <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
+              <label className="text-slate-300 font-medium block">حد الورديات الليلية</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="3"
+                  max="8"
+                  value={formData.overnightCutoffHour ?? 6}
+                  onChange={(e) => setFormData({ ...formData, overnightCutoffHour: parseInt(e.target.value, 10) || 6 })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white font-mono text-center focus:border-blue-500"
+                />
+                <span className="text-slate-400 text-[11px] shrink-0">صباحاً</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">بصمات ما قبلها تُضم لليوم السابق</span>
             </div>
           </div>
         </div>
 
-        {/* Section 4: Backup & Data Safety */}
+        {/* Section 3: Backup & Data Safety */}
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-3">
           <div className="flex items-center gap-2 text-white font-bold text-xs pb-2 border-b border-slate-800">
             <Database className="w-4 h-4 text-purple-400" />
@@ -235,7 +313,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">رقم إصدار البرنامج</span>
-              <span className="font-bold text-emerald-400 font-mono text-sm">V 3.0.6</span>
+              <span className="font-bold text-emerald-400 font-mono text-sm">V 4.0.0</span>
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">نمط العمل والاتصال</span>
@@ -251,15 +329,15 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-sm w-full p-5 space-y-3 shadow-2xl">
             <div className="flex items-center gap-2 text-rose-400">
               <AlertTriangle className="w-5 h-5" />
-              <h3 className="text-sm font-bold text-white">تأكيد إعادة ضبط البيانات</h3>
+              <h3 className="text-sm font-bold text-white">تأكيد استعادة الضبط الافتراضي</h3>
             </div>
             <p className="text-xs text-slate-300">
-              هل أنت متأكد من رغبتك في إعادة تعيين إعدادات وبيانات النظام الافتراضية؟
+              هل أنت متأكد من رغبتك في استعادة الإعدادات الافتراضية للنظام؟
             </p>
-            <div className="pt-2 flex items-center justify-end gap-2 text-xs">
+            <div className="pt-2 flex items-center justify-end gap-2">
               <button
                 onClick={() => setShowResetConfirm(false)}
-                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer"
               >
                 إلغاء
               </button>
@@ -267,12 +345,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 onClick={() => {
                   onResetFactoryData();
                   setShowResetConfirm(false);
-                  setNotification('تمت إعادة ضبط البيانات بنجاح.');
+                  setNotification('تمت استعادة الإعدادات الافتراضية بنجاح.');
                   setTimeout(() => setNotification(null), 4000);
                 }}
-                className="px-3 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-medium cursor-pointer"
+                className="px-3 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium cursor-pointer"
               >
-                تأكيد إعادة الضبط
+                تأكيد الاستعادة
               </button>
             </div>
           </div>

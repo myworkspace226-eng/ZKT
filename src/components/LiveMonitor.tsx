@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Radio, 
   Volume2, 
   VolumeX, 
   Maximize2, 
@@ -15,15 +14,16 @@ import {
   Activity,
   CheckCircle2,
   RefreshCw,
-  ShieldCheck,
-  Check
+  Trash2,
+  WifiOff
 } from 'lucide-react';
 import { Device, Worker, AttendanceRecord } from '../types';
 
 interface LiveMonitorProps {
   devices: Device[];
   workers: Worker[];
-  attendanceRecords: AttendanceRecord[];
+  liveSessionRecords: AttendanceRecord[];
+  onClearLiveSession?: () => void;
   onSyncAll?: () => void;
   isSyncing?: boolean;
 }
@@ -31,7 +31,8 @@ interface LiveMonitorProps {
 export const LiveMonitor: React.FC<LiveMonitorProps> = ({
   devices,
   workers,
-  attendanceRecords,
+  liveSessionRecords,
+  onClearLiveSession,
   onSyncAll,
   isSyncing = false,
 }) => {
@@ -39,11 +40,10 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [selectedMachineFilter, setSelectedMachineFilter] = useState<number | 'all'>('all');
 
-  // Track previous count to beep only when REAL new records are fetched
-  const prevCountRef = useRef<number>(attendanceRecords.length);
+  const prevCountRef = useRef<number>(liveSessionRecords.length);
 
   useEffect(() => {
-    if (soundEnabled && attendanceRecords.length > prevCountRef.current) {
+    if (soundEnabled && liveSessionRecords.length > prevCountRef.current) {
       try {
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
         const osc = audioCtx.createOscillator();
@@ -58,25 +58,22 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
           audioCtx.close();
         }, 120);
       } catch {
-        // AudioContext restricted or unsupported
+        // AudioContext restricted
       }
     }
-    prevCountRef.current = attendanceRecords.length;
-  }, [attendanceRecords.length, soundEnabled]);
+    prevCountRef.current = liveSessionRecords.length;
+  }, [liveSessionRecords.length, soundEnabled]);
 
-  // Real punches feed only (No synthetic simulation)
-  const filteredFeed = attendanceRecords
-    .filter((r) => !r.isDuplicateIgnored)
-    .filter((r) => selectedMachineFilter === 'all' || r.deviceId === selectedMachineFilter);
+  const connectedDevices = devices.filter((d) => d.status === 'connected');
+  const isAnyDeviceConnected = connectedDevices.length > 0;
 
-  const liveFeed = filteredFeed.slice(0, 35);
+  // Filter session records by machine
+  const displayFeed = liveSessionRecords.filter(
+    (r) => selectedMachineFilter === 'all' || r.deviceId === selectedMachineFilter
+  );
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayRecords = attendanceRecords.filter((r) => !r.isDuplicateIgnored && r.displayDate === todayStr);
-  const totalTodayCount = todayRecords.length;
-  const todayPresentWorkers = new Set(todayRecords.filter((r) => r.resolvedState === 'IN').map((r) => r.workerCode)).size;
-  const todayLateCount = todayRecords.filter((r) => r.resolvedState === 'IN' && (r.lateMinutes || 0) > 0).length;
-  const connectedDevicesCount = devices.filter((d) => d.status === 'connected').length;
+  const totalSessionCount = liveSessionRecords.length;
+  const sessionWorkersCount = new Set(liveSessionRecords.map((r) => r.workerCode)).size;
 
   return (
     <div className={`space-y-4 ${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950 p-6 overflow-y-auto' : ''}`}>
@@ -84,20 +81,26 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-lg p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
         <div className="flex items-center gap-3">
           <div className="relative">
-            <div className="w-3 h-3 rounded-full bg-emerald-500 animate-ping" />
-            <div className="absolute inset-0 w-3 h-3 rounded-full bg-emerald-500" />
+            {isAnyDeviceConnected ? (
+              <>
+                <div className="w-3 h-3 rounded-full bg-emerald-500 animate-ping" />
+                <div className="absolute inset-0 w-3 h-3 rounded-full bg-emerald-500" />
+              </>
+            ) : (
+              <div className="w-3 h-3 rounded-full bg-rose-500" />
+            )}
           </div>
           <div>
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>المراقبة الحية للبصمات</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono border border-emerald-500/30 flex items-center gap-1">
-                <ShieldCheck className="w-3 h-3" />
-                <span>حركات فعلية موثقة</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded font-mono border ${
+                isAnyDeviceConnected 
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
+                  : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+              }`}>
+                {isAnyDeviceConnected ? 'بث مباشر نشط' : 'البث متوقف'}
               </span>
             </h2>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              يعرض الحركات الحقيقية المسجلة على أجهزة البصمة فقط (بدون أي توليد عشوائي أو وهمي)
-            </p>
           </div>
         </div>
 
@@ -124,7 +127,19 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium cursor-pointer transition-colors shadow-sm"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'جاري سحب البصمات...' : 'سحب البصمات الآن'}</span>
+              <span>{isSyncing ? 'جاري الفحص...' : 'تحديث البث'}</span>
+            </button>
+          )}
+
+          {/* Clear Session Feed Button */}
+          {onClearLiveSession && liveSessionRecords.length > 0 && (
+            <button
+              onClick={onClearLiveSession}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-700 text-xs transition-colors cursor-pointer"
+              title="مسح سجل الشاشة الحالية"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>مسح الشاشة</span>
             </button>
           )}
 
@@ -136,7 +151,7 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                 ? 'bg-blue-600/20 border-blue-500/40 text-blue-400'
                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
             }`}
-            title={soundEnabled ? 'كتم صوت البصمة عند تسجيل جديد' : 'تفعيل نغمة عند سحب بصمات جديدة'}
+            title={soundEnabled ? 'كتم الصوت' : 'تفعيل نغمة البصمة الحية'}
           >
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
@@ -152,45 +167,54 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
         </div>
       </div>
 
-      {/* KPI Stats Bar */}
+      {/* Disconnected Warning Banner if no machines connected */}
+      {!isAnyDeviceConnected && (
+        <div className="bg-rose-950/40 border border-rose-800/60 rounded-lg p-3 text-rose-300 text-xs flex items-center gap-2">
+          <WifiOff className="w-4 h-4 shrink-0 text-rose-400" />
+          <span>الاتصال مقطوع مع ماكينات البصمة. يتوقف البث المباشر تلقائياً حتى يتم الاتصال بالماكينات عبر الشبكة المحلية.</span>
+        </div>
+      )}
+
+      {/* Live Stats Bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
           <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>حركات اليوم الفعلية</span>
+            <span>بصمات الجلسة الحالية</span>
             <Activity className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-xl font-bold font-mono text-white mt-1">
-            {totalTodayCount}
+            {totalSessionCount}
           </div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
           <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>العمال الحاضرون اليوم</span>
+            <span>عمال بصموا في الجلسة</span>
             <UserCheck className="w-4 h-4 text-blue-400" />
           </div>
           <div className="text-xl font-bold font-mono text-blue-400 mt-1">
-            {todayPresentWorkers} <span className="text-xs font-normal text-slate-400">من {workers.length}</span>
+            {sessionWorkersCount}
           </div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
           <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>تأخيرات مرصودة اليوم</span>
-            <AlertCircle className="w-4 h-4 text-amber-400" />
-          </div>
-          <div className="text-xl font-bold font-mono text-amber-400 mt-1">
-            {todayLateCount}
-          </div>
-        </div>
-
-        <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
-          <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>الماكينات المتصلة</span>
+            <span>الماكينات المتصلة الآن</span>
             <HardDrive className="w-4 h-4 text-purple-400" />
           </div>
           <div className="text-xl font-bold font-mono text-white mt-1">
-            {connectedDevicesCount} / {devices.length}
+            {connectedDevices.length} / {devices.length}
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
+          <div className="flex items-center justify-between text-slate-400 text-xs">
+            <span>حالة البث</span>
+            <Clock className="w-4 h-4 text-cyan-400" />
+          </div>
+          <div className="text-sm font-bold text-white mt-1 flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${isAnyDeviceConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+            <span>{isAnyDeviceConnected ? 'مستمر (Live)' : 'متوقف مؤقتاً'}</span>
           </div>
         </div>
       </div>
@@ -198,23 +222,22 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
       {/* Live Punch Feed Cards */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-          <span className="font-semibold text-white">آخر الحركات الفعلية المسجلة من الماكينات</span>
-          <span className="font-mono">{liveFeed.length} حركة معروضة</span>
+          <span className="font-semibold text-white">البصمات المباشرة الواردة الآن</span>
+          <span className="font-mono">{displayFeed.length} حركة في هذه الجلسة</span>
         </div>
 
         <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1">
-          {liveFeed.length > 0 ? (
-            liveFeed.map((record, index) => {
-              const isLate = (record.lateMinutes || 0) > 0;
-              const isOvertime = record.isOvertime || (record.overtimeHours || 0) > 0;
+          {displayFeed.length > 0 ? (
+            displayFeed.map((record, index) => {
               const isIn = record.resolvedState === 'IN';
+              const isEarly = Boolean(record.isEarlyDeparture);
 
               return (
                 <div
                   key={record.id}
                   className={`border rounded-lg p-3 transition-all flex flex-wrap items-center justify-between gap-3 shadow-sm ${
                     index === 0
-                      ? 'bg-slate-850 border-blue-500/50 ring-1 ring-blue-500/30'
+                      ? 'bg-slate-850 border-emerald-500/50 ring-1 ring-emerald-500/30 animate-in fade-in'
                       : 'bg-slate-900 border-slate-800 hover:border-slate-700'
                   }`}
                 >
@@ -222,8 +245,10 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                   <div className="flex items-center gap-3">
                     <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
                       isIn 
-                        ? isLate ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                        : isOvertime ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        : isEarly 
+                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                        : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
                     }`}>
                       {record.punchType === 'FACE' ? (
                         <ScanFace className="w-5 h-5" />
@@ -240,6 +265,9 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">
                           كود {record.workerCode}
                         </span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800/80 text-cyan-300">
+                          {record.punchType === 'FACE' ? 'وجه' : record.punchType === 'CARD' ? 'كارت' : 'بصمة إصبع'}
+                        </span>
                       </div>
                       <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
                         <span>{record.department}</span>
@@ -251,27 +279,20 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
 
                   {/* Punch Status & Time */}
                   <div className="flex items-center gap-3 font-mono">
-                    {/* Status Badge */}
                     <div>
                       {isIn ? (
-                        isLate ? (
-                          <span className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 text-[11px] font-sans font-medium border border-amber-500/30 flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            <span>تأخير {record.lateMinutes} دقيقة</span>
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 text-[11px] font-sans font-medium border border-emerald-500/30 flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>حضور في الموعد</span>
-                          </span>
-                        )
-                      ) : isOvertime ? (
-                        <span className="px-2.5 py-1 rounded bg-purple-500/20 text-purple-300 text-[11px] font-sans font-medium border border-purple-500/30">
-                          انصراف (ساعات إضافي)
+                        <span className="px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 text-[11px] font-sans font-medium border border-emerald-500/30 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>تسجيل حضور</span>
+                        </span>
+                      ) : isEarly ? (
+                        <span className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 text-[11px] font-sans font-medium border border-amber-500/30 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          <span>انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)</span>
                         </span>
                       ) : (
                         <span className="px-2.5 py-1 rounded bg-blue-500/20 text-blue-300 text-[11px] font-sans font-medium border border-blue-500/30">
-                          انصراف عادي
+                          تسجيل انصراف
                         </span>
                       )}
                     </div>
@@ -288,8 +309,8 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
           ) : (
             <div className="bg-slate-900 border border-slate-800 rounded-lg p-10 text-center text-xs text-slate-500 space-y-2">
               <Fingerprint className="w-8 h-8 text-slate-600 mx-auto" />
-              <p>لا توجد حركات مسجلة تطابق الماكينة المحددة حتى الآن.</p>
-              <p className="text-[11px] text-slate-600">اضغط على "سحب البصمات الآن" لجلب أحدث البصمات من الماكينات المتصلة.</p>
+              <p>بانتظار تسجيل بصمات جديدة من العمال على الماكينات المتصلة حالياً...</p>
+              <p className="text-[11px] text-slate-600">هذه الشاشة تعرض البصمات اللحظية المباشرة فقط بعد فتح البرنامج، ويتم مسح السجل تلقائياً عند إغلاق البرنامج.</p>
             </div>
           )}
         </div>

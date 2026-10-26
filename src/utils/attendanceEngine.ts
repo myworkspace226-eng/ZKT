@@ -60,8 +60,43 @@ export function resolveSmartPunchState(
  * 4. Missed Punch Exceptions: Mark single punch days as isMissedPunch without guessing fake times.
  * 5. HR Override Protection: isHROverride / isManual records are preserved exactly as set by HR.
  */
-export function processSmartAttendanceLogs(records: AttendanceRecord[]): AttendanceRecord[] {
+export interface SmartAttendanceOptions {
+  shiftEndTime?: string; // e.g. "16:30"
+  earlyDepartureWindowMinutes?: number; // e.g. 30 (16:00 - 16:30)
+  overnightCutoffHour?: number; // e.g. 6 (06:00 AM)
+  now?: Date;
+}
+
+/**
+ * Smart Attendance Processing Engine (خوارزمية معالجة البصمات الذكية الاحترافية - V 4.0.0)
+ * 1. 1-Hour Cooldown Deduplication: Ignore any punch occurring within < 60 minutes of previous accepted punch.
+ * 2. Overnight Shifts Attachment: Punches between 00:00 and 05:59 AM attach to previous day as OUT if worker was checked in.
+ * 3. First & Last Punch: 1st punch = IN, last punch = OUT, intermediate punches = ignored.
+ * 4. Delayed Missed Punch: Single IN punch only alerts as missed punch AFTER shift end (16:30) or on past days.
+ * 5. Early Departure: Punches out between 16:00 and 16:30 get flagged with early departure badge.
+ * 6. HR Override Protection: isHROverride / isManual records are preserved exactly as set by HR.
+ */
+export function processSmartAttendanceLogs(
+  records: AttendanceRecord[],
+  options?: SmartAttendanceOptions
+): AttendanceRecord[] {
   if (!records || records.length === 0) return [];
+
+  const now = options?.now || new Date();
+  const nowTotalMinutes = now.getHours() * 60 + now.getMinutes();
+
+  // Local YYYY-MM-DD
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const todayStr = `${y}-${m}-${d}`;
+
+  const shiftEndStr = options?.shiftEndTime || '16:30';
+  const [endH, endM] = shiftEndStr.split(':').map((v) => parseInt(v, 10) || 0);
+  const shiftEndTotalMinutes = endH * 60 + endM; // 990 (16:30)
+  const earlyWindowMin = options?.earlyDepartureWindowMinutes ?? 30;
+  const earlyStartMinutes = shiftEndTotalMinutes - earlyWindowMin; // 960 (16:00)
+  const overnightCutoff = options?.overnightCutoffHour ?? 6;
 
   // Group records by workerCode
   const workerGroups = new Map<number, AttendanceRecord[]>();
@@ -125,8 +160,8 @@ export function processSmartAttendanceLogs(records: AttendanceRecord[]): Attenda
       const hours = parseInt(hStr, 10) || 0;
       let targetWorkDay = rec.displayDate;
 
-      // Check if late night punch (before 06:00 AM)
-      if (hours < 6) {
+      // Check if late night punch (before overnight cutoff e.g. 06:00 AM)
+      if (hours < overnightCutoff) {
         // Calculate previous calendar date YYYY-MM-DD
         const curDate = new Date(`${rec.displayDate}T12:00:00`);
         curDate.setDate(curDate.getDate() - 1);
@@ -147,23 +182,55 @@ export function processSmartAttendanceLogs(records: AttendanceRecord[]): Attenda
       dList.push(rec);
     }
 
+    // Helper to evaluate Early Departure for a check-out punch
+    const applyEarlyDepartureCheck = (punch: AttendanceRecord) => {
+      if (punch.isHROverride) return;
+      const [pHStr, pMStr] = (punch.displayTime || '16:00').split(':');
+      const pH = parseInt(pHStr, 10) || 0;
+      const pM = parseInt(pMStr, 10) || 0;
+      const punchMinutes = pH * 60 + pM;
+
+      if (punchMinutes >= earlyStartMinutes && punchMinutes < shiftEndTotalMinutes) {
+        const diff = shiftEndTotalMinutes - punchMinutes;
+        punch.isEarlyDeparture = true;
+        punch.earlyDepartureMinutes = diff;
+        punch.earlyDepartureReason = `انصراف مبكر (-${diff} د) قبل موعد نهاية الوردية (${shiftEndStr})`;
+      } else {
+        punch.isEarlyDeparture = false;
+        punch.earlyDepartureMinutes = 0;
+        punch.earlyDepartureReason = undefined;
+      }
+    };
+
     // 4. First and Last Punch Rule per Work Day & Missed Punch Detection
-    dayPunchesMap.forEach((punchesOnDay) => {
+    dayPunchesMap.forEach((punchesOnDay, workDay) => {
       punchesOnDay.sort((a, b) => {
         const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
         const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
         return tA - tB;
       });
 
+      const isToday = workDay === todayStr;
+      const isPastShiftEnd = isToday ? nowTotalMinutes >= shiftEndTotalMinutes : true;
+
       if (punchesOnDay.length === 1) {
         const singlePunch = punchesOnDay[0];
 
         if (singlePunch.isHROverride) {
-          singlePunch.isMissedPunch = true;
-          singlePunch.missedPunchType = singlePunch.resolvedState === 'IN' ? 'OUT' : 'IN';
-          singlePunch.missedPunchReason = singlePunch.resolvedState === 'IN'
-            ? 'بصمة انصراف مفقودة (تم تسجيل الحضور يدوياً)'
-            : 'بصمة حضور مفقودة (تم تسجيل الانصراف يدوياً)';
+          if (singlePunch.resolvedState === 'IN') {
+            if (isPastShiftEnd) {
+              singlePunch.isMissedPunch = true;
+              singlePunch.missedPunchType = 'OUT';
+              singlePunch.missedPunchReason = 'بصمة انصراف مفقودة (تم تسجيل الحضور يدوياً)';
+            } else {
+              singlePunch.isMissedPunch = false;
+            }
+          } else {
+            singlePunch.isMissedPunch = true;
+            singlePunch.missedPunchType = 'IN';
+            singlePunch.missedPunchReason = 'بصمة حضور مفقودة (تم تسجيل الانصراف يدوياً)';
+            applyEarlyDepartureCheck(singlePunch);
+          }
           processedAll.push(singlePunch);
           return;
         }
@@ -172,15 +239,25 @@ export function processSmartAttendanceLogs(records: AttendanceRecord[]): Attenda
         const hour = parseInt(hStr, 10) || 8;
 
         if (hour < 12 || singlePunch.rawState === 'IN') {
+          // Morning / First Punch is IN
           singlePunch.resolvedState = 'IN';
-          singlePunch.isMissedPunch = true;
-          singlePunch.missedPunchType = 'OUT';
-          singlePunch.missedPunchReason = 'بصمة انصراف مفقودة (لم يسجل خروج)';
+          // Point 4: Do NOT alert missed punch in mid-day! Only after shift end (16:30) or past days.
+          if (isPastShiftEnd) {
+            singlePunch.isMissedPunch = true;
+            singlePunch.missedPunchType = 'OUT';
+            singlePunch.missedPunchReason = 'بصمة انصراف مفقودة (لم يسجل خروج)';
+          } else {
+            singlePunch.isMissedPunch = false;
+            singlePunch.missedPunchReason = undefined;
+          }
+          singlePunch.isEarlyDeparture = false;
         } else {
+          // Afternoon single punch without morning check-in
           singlePunch.resolvedState = 'OUT';
           singlePunch.isMissedPunch = true;
           singlePunch.missedPunchType = 'IN';
-          singlePunch.missedPunchReason = 'بصمة حضور مفقودة (لم يسجل دخول)';
+          singlePunch.missedPunchReason = 'بصمة حضور مفقودة (لم يسجل دخول في الصباح)';
+          applyEarlyDepartureCheck(singlePunch);
         }
         processedAll.push(singlePunch);
 
@@ -193,6 +270,7 @@ export function processSmartAttendanceLogs(records: AttendanceRecord[]): Attenda
         firstPunch.isDuplicateIgnored = false;
         firstPunch.isMissedPunch = false;
         firstPunch.missedPunchReason = undefined;
+        firstPunch.isEarlyDeparture = false;
         processedAll.push(firstPunch);
 
         const lastPunch = punchesOnDay[punchesOnDay.length - 1];
@@ -202,6 +280,8 @@ export function processSmartAttendanceLogs(records: AttendanceRecord[]): Attenda
         lastPunch.isDuplicateIgnored = false;
         lastPunch.isMissedPunch = false;
         lastPunch.missedPunchReason = undefined;
+        // Check early departure for the OUT punch
+        applyEarlyDepartureCheck(lastPunch);
         processedAll.push(lastPunch);
 
         // Intermediate punches
@@ -329,12 +409,26 @@ export function calculateDailyPerformance(
     workHours = 8;
   }
 
+  const isEarly = Boolean(checkOut?.isEarlyDeparture);
+  const earlyMin = checkOut?.earlyDepartureMinutes || 0;
+
+  let statusText = lateMinutes > 0 ? 'حاضر متأخر' : 'حاضر في الموعد';
+  if (isEarly && earlyMin > 0) {
+    statusText = `حاضر (انصراف مبكر -${earlyMin} د)`;
+  }
+
   return {
-    status: lateMinutes > 0 ? 'حاضر متأخر' : 'حاضر في الموعد',
+    status: statusText,
     workHours: Number(workHours.toFixed(2)),
     overtimeHours: Number(overtimeHours.toFixed(2)),
     lateMinutes,
-    notes: isFriday ? 'عمل يوم الجمعة (مضاعف 2x - 16 ساعة)' : '',
+    isEarlyDeparture: isEarly,
+    earlyDepartureMinutes: earlyMin,
+    notes: isFriday 
+      ? 'عمل يوم الجمعة (مضاعف 2x - 16 ساعة)' 
+      : isEarly 
+      ? `انصراف مبكر (-${earlyMin} دقيقة)` 
+      : '',
   };
 }
 

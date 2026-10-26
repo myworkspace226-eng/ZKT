@@ -137,7 +137,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 3.0.6)',
+    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 4.0.0)',
     icon: iconPath,
     webPreferences: {
       nodeIntegration: true,
@@ -307,7 +307,12 @@ safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) =
       success: true,
       pingMs,
       records: rawRecords.map((r, idx) => {
-        const vType = r.verify_type !== undefined ? r.verify_type : (r.verifyType !== undefined ? r.verifyType : (r.verification_type !== undefined ? r.verification_type : (r.state !== undefined ? r.state : 0)));
+        // In zkteco-js protocol:
+        // Byte 26 (r.type): verify_type (1: Fingerprint, 15: Face, 2/3: Card/Pwd)
+        // Byte 31 (r.state): att_state (0: Check-In, 1: Check-Out)
+        const vType = r.verify_type !== undefined 
+          ? r.verify_type 
+          : (r.type !== undefined ? r.type : 1);
         const vMode = r.verify_mode !== undefined ? r.verify_mode : (r.verifyMode !== undefined ? r.verifyMode : 0);
         return {
           id: idx + 1,
@@ -316,7 +321,7 @@ safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) =
           recordTime: r.record_time || new Date().toISOString(),
           type: r.type || 0,
           state: r.state || 0,
-          verifyType: Number(vType) || 0,
+          verifyType: Number(vType) || 1,
           verifyMode: Number(vMode) || 0,
           ip: ip,
         };

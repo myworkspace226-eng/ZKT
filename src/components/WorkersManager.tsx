@@ -22,7 +22,8 @@ import {
   Save,
   Sparkles,
   Clock,
-  Check
+  Check,
+  Trash2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Worker, Device } from '../types';
@@ -33,6 +34,7 @@ interface WorkersManagerProps {
   devices: Device[];
   onUpdateWorker: (worker: Worker) => void;
   onAddWorker: (worker: Worker) => void;
+  onDeleteWorker?: (workerCode: number) => void;
 }
 
 export const WorkersManager: React.FC<WorkersManagerProps> = ({
@@ -40,6 +42,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   devices,
   onUpdateWorker,
   onAddWorker,
+  onDeleteWorker,
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'active' | 'frozen' | 'pendingSync'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -48,6 +51,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
 
   // Modals
   const [deactivatingWorker, setDeactivatingWorker] = useState<Worker | null>(null);
+  const [workerToDelete, setWorkerToDelete] = useState<Worker | null>(null);
   const [reactivatingWorker, setReactivatingWorker] = useState<Worker | null>(null);
   const [targetDeviceIds, setTargetDeviceIds] = useState<number[]>([101, 102, 103, 104, 105, 106]);
   const [transferringWorker, setTransferringWorker] = useState<Worker | null>(null);
@@ -681,22 +685,43 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                             </button>
                             <button
                               onClick={() => setDeactivatingWorker(worker)}
-                              className="px-2 py-0.5 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 text-[11px] border border-rose-800/40 transition-colors cursor-pointer"
+                              className="px-2 py-0.5 rounded bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 text-[11px] border border-amber-800/40 transition-colors cursor-pointer"
+                              title="تجميد العامل مؤقتاً"
                             >
                               تجميد
                             </button>
+                            {onDeleteWorker && (
+                              <button
+                                onClick={() => setWorkerToDelete(worker)}
+                                className="p-1 rounded bg-slate-800 hover:bg-rose-600/30 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer border border-slate-700/60"
+                                title="حذف العامل نهائياً من قاعدة بيانات البرنامج (آمن - لا يمس الماكينة)"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </>
                         ) : (
-                          <button
-                            onClick={() => {
-                              setReactivatingWorker(worker);
-                              setTargetDeviceIds(worker.assignedDeviceIds.length ? worker.assignedDeviceIds : [101, 102]);
-                            }}
-                            className="px-2.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-medium flex items-center gap-1 cursor-pointer"
-                          >
-                            <RefreshCcw className="w-3 h-3" />
-                            <span>إعادة تنشيط</span>
-                          </button>
+                          <>
+                            <button
+                              onClick={() => {
+                                setReactivatingWorker(worker);
+                                setTargetDeviceIds(worker.assignedDeviceIds.length ? worker.assignedDeviceIds : [101, 102]);
+                              }}
+                              className="px-2.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-medium flex items-center gap-1 cursor-pointer"
+                            >
+                              <RefreshCcw className="w-3 h-3" />
+                              <span>إعادة تنشيط</span>
+                            </button>
+                            {onDeleteWorker && (
+                              <button
+                                onClick={() => setWorkerToDelete(worker)}
+                                className="p-1 rounded bg-slate-800 hover:bg-rose-600/30 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer border border-slate-700/60"
+                                title="حذف العامل نهائياً من قاعدة بيانات البرنامج (آمن - لا يمس الماكينة)"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -1384,6 +1409,75 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Safe Local Delete Worker Confirmation Modal (Point 5 & Point 7) */}
+      {workerToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-900/60 rounded-xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-400">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">تأكيد حذف العامل محلياً</h3>
+                  <p className="text-[11px] text-slate-400">كود #{workerToDelete.code} - {workerToDelete.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setWorkerToDelete(null)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="bg-rose-950/30 border border-rose-800/40 rounded-lg p-3 text-rose-200/90 space-y-2 leading-relaxed">
+                <p className="font-semibold text-rose-300">
+                  هل أنت متأكد من حذف العامل <span className="text-white font-bold">({workerToDelete.name})</span> من قاعدة بيانات البرنامج؟
+                </p>
+                <div className="bg-slate-950 p-2.5 rounded border border-slate-800 space-y-1.5 text-[11px] text-slate-300">
+                  <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>الحذف الآمن (محلي فقط):</span>
+                  </div>
+                  <ul className="list-disc list-inside space-y-1 text-slate-300 pr-1">
+                    <li>سيتم مسح بيانات وسجلات العامل من قاعدة بيانات البرنامج المحلية فقط.</li>
+                    <li><strong className="text-emerald-400">لن يتم إرسال أي أمر حذف إلى ماكينة البصمة</strong> إطلاقاً.</li>
+                    <li>بصمات العامل وقوالبه الحيوية محفوظة على الماكينات للأبد دون أي تغيير.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setWorkerToDelete(null)}
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!workerToDelete) return;
+                  const c = workerToDelete.code;
+                  const n = workerToDelete.name;
+                  onDeleteWorker?.(c);
+                  setWorkerToDelete(null);
+                  setNotification(`🗑️ تم حذف العامل (${n} - كود ${c}) من البرنامج بنجاح، مع بقاء بصماته على الماكينات.`);
+                  setTimeout(() => setNotification(null), 5000);
+                }}
+                className="px-4 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تأكيد الحذف المحلي</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

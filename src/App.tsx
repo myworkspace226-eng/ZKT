@@ -10,7 +10,6 @@ import { DashboardHUD } from './components/DashboardHUD';
 import { DeviceManager } from './components/DeviceManager';
 import { AttendanceLogs } from './components/AttendanceLogs';
 import { WorkersManager } from './components/WorkersManager';
-import { ShiftPolicyManager } from './components/ShiftPolicyManager';
 import { GatePassManager } from './components/GatePassManager';
 import { ReportsCenter } from './components/ReportsCenter';
 import { LiveMonitor } from './components/LiveMonitor';
@@ -86,6 +85,9 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [globalNotice, setGlobalNotice] = useState<string | null>(null);
 
+  // Transient session-only live punches (never persisted to localStorage, resets on reload)
+  const [liveSessionRecords, setLiveSessionRecords] = useState<AttendanceRecord[]>([]);
+
   // Auto-save changes to localStorage
   useEffect(() => {
     try {
@@ -131,7 +133,7 @@ export default function App() {
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 3.0.6', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 4.0.0', 
       type: 'info' 
     }
   ]);
@@ -348,6 +350,7 @@ export default function App() {
 
     if (allNewRecords.length > 0) {
       setAttendanceRecords((prev) => [...allNewRecords, ...prev]);
+      setLiveSessionRecords((prev) => [...allNewRecords, ...prev]);
     }
 
     setIsSyncing(false);
@@ -430,6 +433,7 @@ export default function App() {
 
       if (newRecords.length > 0) {
         setAttendanceRecords((prev) => [...newRecords, ...prev]);
+        setLiveSessionRecords((prev) => [...newRecords, ...prev]);
       }
 
       const totalRecordCount = res.deviceInfo?.logCounts ?? res.records.length;
@@ -502,6 +506,14 @@ export default function App() {
   const handleAddWorker = (newWorker: Worker) => {
     setWorkers((prev) => [newWorker, ...prev]);
     showNotification(`تمت إضافة العامل ${newWorker.name} بنجاح.`);
+  };
+
+  // Safe Local Delete Worker (Point 5 & Point 7: Zero impact on physical hardware)
+  const handleDeleteWorker = (workerCode: number) => {
+    setWorkers((prev) => prev.filter((w) => w.code !== workerCode));
+    setAttendanceRecords((prev) => prev.filter((r) => r.workerCode !== workerCode));
+    setLiveSessionRecords((prev) => prev.filter((r) => r.workerCode !== workerCode));
+    showNotification(`🗑️ تم مسح بيانات وسجلات العامل (كود #${workerCode}) محلياً من البرنامج بنجاح.`);
   };
 
   // 6. Update Shift Rule
@@ -607,18 +619,40 @@ export default function App() {
   // 12. Live Punch Received Handler
   const handleNewLiveRecord = (record: AttendanceRecord) => {
     setAttendanceRecords((prev) => [record, ...prev]);
+    setLiveSessionRecords((prev) => [record, ...prev]);
   };
 
-  // 13. Settings & Backup Handlers
+  // 13. Settings & Backup Handlers (Point 8: Sync Settings to Shift Engine)
   const handleUpdateSettings = (newSettings: FactorySettings) => {
     setSettings(newSettings);
-    showNotification('تم حفظ إعدادات النظام وسياسات العمل بنجاح.');
+    setShifts((prev) =>
+      prev.map((s) => {
+        if (s.id === 'standard') {
+          return {
+            ...s,
+            startTime: newSettings.standardShiftStart || s.startTime,
+            endTime: newSettings.standardShiftEnd || s.endTime,
+            generalGraceMinutes: newSettings.defaultGraceMinutes ?? s.generalGraceMinutes,
+          };
+        }
+        if (s.id === 'bangladeshi') {
+          return {
+            ...s,
+            startTime: newSettings.bangladeshiShiftStart || s.startTime,
+            endTime: newSettings.bangladeshiShiftEnd || s.endTime,
+            generalGraceMinutes: newSettings.defaultGraceMinutes ?? s.generalGraceMinutes,
+          };
+        }
+        return s;
+      })
+    );
+    showNotification('تم حفظ إعدادات النظام ومواعيد الورديات وسياسات الحضور بنجاح.');
   };
 
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '3.0.6',
+      version: '4.0.0',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
@@ -708,7 +742,8 @@ export default function App() {
               <LiveMonitor
                 devices={devices}
                 workers={workers}
-                attendanceRecords={attendanceRecords}
+                liveSessionRecords={liveSessionRecords}
+                onClearLiveSession={() => setLiveSessionRecords([])}
                 onSyncAll={handleSyncAllDevices}
                 isSyncing={isSyncing}
               />
@@ -726,21 +761,21 @@ export default function App() {
                 onDeleteDevice={handleDeleteDevice}
                 onImportWorkers={(newWorkers) => {
                   setWorkers((prev) => {
-                    const updated = [...prev];
-                    const codeToIdx = new Map(updated.map((w, idx) => [w.code, idx]));
-                    const trulyNew: Worker[] = [];
+                    const workerMap = new Map<number, Worker>();
+                    // Populate existing workers first
+                    for (const w of prev) {
+                      workerMap.set(Number(w.code), { ...w });
+                    }
 
                     for (const nw of newWorkers) {
-                      if (codeToIdx.has(nw.code)) {
-                        const idx = codeToIdx.get(nw.code)!;
-                        const existing = updated[idx];
+                      const code = Number(nw.code);
+                      if (!code) continue;
 
-                        // Point 9: Auto-link worker to the machine pulled from
+                      const existing = workerMap.get(code);
+                      if (existing) {
                         const mergedDeviceIds = Array.from(
                           new Set([...(existing.assignedDeviceIds || []), ...(nw.assignedDeviceIds || [])])
                         );
-
-                        // Point 8: Protect existing known name, only update if new name is a real valid non-placeholder name
                         const hasRealName = Boolean(
                           nw.name && 
                           !nw.name.startsWith('عامل كود #') && 
@@ -748,11 +783,9 @@ export default function App() {
                           nw.name.trim().length > 1
                         );
                         const finalName = hasRealName ? nw.name.trim() : existing.name;
-
-                        // Point 7: Bengali workers auto-detection (Latin/English characters)
                         const isEnglishName = /^[A-Za-z\s.'-]+$/.test(finalName) && finalName.length > 2;
 
-                        updated[idx] = {
+                        workerMap.set(code, {
                           ...existing,
                           name: finalName,
                           assignedDeviceIds: mergedDeviceIds,
@@ -761,12 +794,12 @@ export default function App() {
                           shiftId: isEnglishName ? 'bangladeshi' : (existing.shiftId || 'standard'),
                           isNameSyncedToDevice: true,
                           hasFingerprint: true,
-                        };
+                        });
                       } else {
-                        // Brand new worker from machine
                         const isEnglishName = /^[A-Za-z\s.'-]+$/.test(nw.name) && nw.name.length > 2;
-                        trulyNew.push({
+                        workerMap.set(code, {
                           ...nw,
+                          code,
                           nationality: isEnglishName ? 'بنغلاديشي' : (nw.nationality || 'مصري'),
                           shiftId: isEnglishName ? 'bangladeshi' : (nw.shiftId || 'standard'),
                           assignedDeviceIds: nw.assignedDeviceIds || [],
@@ -774,9 +807,10 @@ export default function App() {
                         });
                       }
                     }
-                    return [...trulyNew, ...updated];
+
+                    return Array.from(workerMap.values()).sort((a, b) => a.code - b.code);
                   });
-                  showNotification(`✅ تم سحب وتحديث بيانات ${newWorkers.length} عامل في قاعدة البيانات بنجاح.`);
+                  showNotification(`✅ تم سحب وتحديث بيانات العمال في قاعدة البيانات بنجاح (المفتاح الأساسي: كود العامل).`);
                 }}
                 onResetMockData={handleResetMockData}
               />
@@ -787,6 +821,7 @@ export default function App() {
                 records={attendanceRecords}
                 workers={workers}
                 devices={devices}
+                shiftEndTime={settings.standardShiftEnd}
                 onAddManualRecord={handleAddManualRecord}
                 onUpdateRecord={handleUpdateRecord}
                 onDeleteRecord={handleDeleteRecord}
@@ -799,15 +834,7 @@ export default function App() {
                 devices={devices}
                 onUpdateWorker={handleUpdateWorker}
                 onAddWorker={handleAddWorker}
-              />
-            )}
-
-            {activeTab === 'shifts' && (
-              <ShiftPolicyManager
-                shifts={shifts}
-                workers={workers}
-                onUpdateShift={handleUpdateShift}
-                onUpdateWorkerGrace={handleUpdateWorkerGrace}
+                onDeleteWorker={handleDeleteWorker}
               />
             )}
 

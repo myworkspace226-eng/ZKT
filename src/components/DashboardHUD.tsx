@@ -33,15 +33,19 @@ export const DashboardHUD: React.FC<DashboardHUDProps> = ({
   onSyncDevices,
 }) => {
   const activeWorkers = workers.filter(w => w.isActive);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayPunches = attendanceRecords.filter(r => 
+    !r.isDuplicateIgnored && (r.displayDate === todayStr || (r.timestamp && r.timestamp.slice(0, 10) === todayStr))
+  );
   
   const presentWorkerCodes = new Set(
-    attendanceRecords.filter(r => r.resolvedState === 'IN').map(r => r.workerCode)
+    todayPunches.map(r => Number(r.workerCode))
   );
 
   const presentCount = presentWorkerCodes.size;
   const absentCount = Math.max(0, activeWorkers.length - presentCount);
-  const lateCount = attendanceRecords.filter(r => (r.lateMinutes || 0) > 0 && !r.isDuplicateIgnored).length;
-  const totalOvertime = attendanceRecords.reduce((acc, r) => acc + (r.overtimeHours || 0), 0);
+  const lateCount = todayPunches.filter(r => (r.lateMinutes || 0) > 0).length;
+  const totalOvertime = todayPunches.reduce((acc, r) => acc + (r.overtimeHours || 0), 0);
 
   const departmentMap: Record<string, { total: number; present: number; late: number; absent: number }> = {};
   

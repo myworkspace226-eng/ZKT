@@ -1,4 +1,4 @@
-import { Device, Worker, AttendanceRecord, ShiftRule, GatePass } from '../types';
+import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings } from '../types';
 
 // The 6 Real Devices from the user's factory screenshot, initialized in DISCONNECTED state with 0 logs
 export const INITIAL_DEVICES: Device[] = [
