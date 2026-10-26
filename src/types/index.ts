@@ -72,6 +72,9 @@ export interface AttendanceRecord {
   isMissedPunch?: boolean;
   missedPunchType?: 'IN' | 'OUT';
   missedPunchReason?: string;
+  isEarlyDeparture?: boolean;
+  earlyDepartureMinutes?: number;
+  earlyDepartureReason?: string;
 }
 
 export interface ShiftRule {
@@ -127,12 +130,18 @@ export interface FactorySettings {
   factoryName: string;
   branchName: string;
   defaultGraceMinutes: number;
-  fridayMultiplier: number;
-  regularOvertimeMultiplier: number;
-  nightOvertimeMultiplier: number;
-  defaultHourlyRate: number;
+  earlyDepartureWindowMinutes: number; // e.g. 30 (from 16:00 to 16:30)
+  standardShiftStart: string; // "08:00"
+  standardShiftEnd: string; // "16:30"
+  bangladeshiShiftStart: string; // "08:00"
+  bangladeshiShiftEnd: string; // "18:30"
+  overnightCutoffHour: number; // 6 (06:00 AM)
   autoAbsenceCutoffTime: string; // e.g. "08:30"
   autoSyncIntervalMinutes: number;
+  fridayMultiplier?: number;
+  regularOvertimeMultiplier?: number;
+  nightOvertimeMultiplier?: number;
+  defaultHourlyRate?: number;
 }
 
 export interface ProductionLineStatus {

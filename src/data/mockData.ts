@@ -128,14 +128,16 @@ export const INITIAL_WORKERS: Worker[] = [];
 export const INITIAL_ATTENDANCE_RECORDS: AttendanceRecord[] = [];
 export const INITIAL_GATE_PASSES: GatePass[] = [];
 
-export const DEFAULT_FACTORY_SETTINGS = {
+export const DEFAULT_FACTORY_SETTINGS: FactorySettings = {
   factoryName: 'مصنع الملابس الجاهزة',
   branchName: 'المبنى الرئيسي - خطوط الإنتاج',
   defaultGraceMinutes: 15,
-  fridayMultiplier: 2.0,
-  regularOvertimeMultiplier: 1.5,
-  nightOvertimeMultiplier: 2.0,
-  defaultHourlyRate: 35,
+  earlyDepartureWindowMinutes: 30,
+  standardShiftStart: '08:00',
+  standardShiftEnd: '16:30',
+  bangladeshiShiftStart: '08:00',
+  bangladeshiShiftEnd: '18:30',
+  overnightCutoffHour: 6,
   autoAbsenceCutoffTime: '08:30',
   autoSyncIntervalMinutes: 5,
 };
