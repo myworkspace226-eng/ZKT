@@ -29,90 +29,112 @@ try {
     return str;
   }
 
-  function decodeArabicNameBuffer(buf) {
-    if (!buf || buf.length === 0) return '';
+  // Isolated, memory-safe name decoder for ZKTeco binary user packets
+  function decodeWorkerNameFromBuffer(rawNameBuf) {
+    if (!rawNameBuf || rawNameBuf.length === 0) return '';
 
-    // 1. Check for UTF-16LE / UCS-2 (common on color-screen ZKTeco terminals)
-    try {
-      const utf16Str = iconv.decode(buf, 'utf16le').replace(/\0.*$/g, '').trim();
-      if (/[\u0600-\u06FF]/.test(utf16Str) || (utf16Str.length >= 2 && /^[A-Za-z0-9\s._'-]+$/.test(utf16Str))) {
-        return utf16Str;
-      }
-    } catch {}
-
-    // 2. Windows-1256 (standard 8-bit Arabic codepage for ZKTeco firmware)
-    const nullIdx = buf.indexOf(0);
-    const clean8bit = nullIdx !== -1 ? buf.subarray(0, nullIdx) : buf;
-    if (clean8bit.length > 0) {
-      try {
-        const win1256Str = iconv.decode(clean8bit, 'win1256').replace(/\0/g, '').trim();
-        if (/[\u0600-\u06FF]/.test(win1256Str)) {
-          return win1256Str;
-        }
-      } catch {}
-
-      // 3. UTF-8 & Mojibake repair
-      try {
-        const utf8Str = clean8bit.toString('utf8').replace(/\0/g, '').trim();
-        if (/[\u0600-\u06FF]/.test(utf8Str)) {
-          return utf8Str;
-        }
-        const fixed = fixMojibake(utf8Str);
-        if (/[\u0600-\u06FF]/.test(fixed)) {
-          return fixed;
-        }
-        if (utf8Str.length > 0 && !/[\x00-\x1F]/.test(utf8Str)) {
-          return utf8Str;
-        }
-      } catch {}
-
-      // 4. Latin / English / Bengali names (e.g. MD RASEL)
-      const printable = clean8bit.toString('utf8').replace(/[\x00-\x1F\x7F]/g, '').trim();
-      if (printable.length > 0) {
-        return printable;
+    // 1. Verify if buffer has any non-zero bytes (all 0x00 means user was registered without name)
+    let hasData = false;
+    for (let i = 0; i < rawNameBuf.length; i++) {
+      if (rawNameBuf[i] !== 0) {
+        hasData = true;
+        break;
       }
     }
+    if (!hasData) return '';
 
-    // 5. Fallback scan if initial bytes were zero
-    for (let i = 0; i < buf.length; i++) {
-      if (buf[i] !== 0) {
-        try {
-          const str = iconv.decode(buf.subarray(i), 'win1256').replace(/\0.*$/g, '').trim();
-          if (str.length > 0) return str;
-        } catch {}
+    // Truncate at first null byte (0x00)
+    const nullIdx = rawNameBuf.indexOf(0);
+    const validBytes = nullIdx !== -1 ? rawNameBuf.subarray(0, nullIdx) : rawNameBuf;
+    if (validBytes.length === 0) return '';
+
+    // 2. Strict ASCII Check:
+    // If all bytes are standard printable English / Latin ASCII characters (32 to 126),
+    // return immediately as ASCII string without any Arabic decoding interference!
+    let isPureAscii = true;
+    for (let i = 0; i < validBytes.length; i++) {
+      const b = validBytes[i];
+      if (b < 32 || b > 126) {
+        isPureAscii = false;
         break;
       }
     }
 
-    return '';
+    if (isPureAscii) {
+      // English / Bengali Latin name (e.g. "MD RASEL", "AKRAM", "JOHN")
+      return validBytes.toString('ascii').trim();
+    }
+
+    // 3. If buffer contains non-ASCII bytes (e.g. byte >= 0x80), test for Arabic:
+    // A. Windows-1256 (standard 8-bit Arabic codepage for ZKTeco terminals)
+    try {
+      const win1256Str = iconv.decode(validBytes, 'win1256').replace(/\0/g, '').trim();
+      if (/[\u0600-\u06FF]/.test(win1256Str)) {
+        return win1256Str;
+      }
+    } catch {}
+
+    // B. UTF-8 Arabic & Mojibake repair
+    try {
+      const utf8Str = clean8bitToString(validBytes);
+      if (/[\u0600-\u06FF]/.test(utf8Str)) {
+        return utf8Str;
+      }
+      const fixed = fixMojibake(utf8Str);
+      if (/[\u0600-\u06FF]/.test(fixed)) {
+        return fixed;
+      }
+    } catch {}
+
+    // C. UTF-16LE (only if it yields actual Arabic characters)
+    try {
+      const utf16Str = iconv.decode(validBytes, 'utf16le').replace(/\0/g, '').trim();
+      if (/[\u0600-\u06FF]/.test(utf16Str)) {
+        return utf16Str;
+      }
+    } catch {}
+
+    // D. Fallback: clean printable UTF-8 or empty
+    return validBytes.toString('utf8').replace(/[\x00-\x1F\x7F]/g, '').trim();
   }
 
+  function clean8bitToString(buf) {
+    try {
+      return buf.toString('utf8').replace(/\0/g, '').trim();
+    } catch {
+      return '';
+    }
+  }
+
+  // Hook decodeUserData72: guarantee zero caching and explicit per-user name reset
   if (zktUtils && zktUtils.decodeUserData72) {
     const origDecode72 = zktUtils.decodeUserData72;
     zktUtils.decodeUserData72 = (userData) => {
       const user = origDecode72(userData);
-      if (user && userData.length >= 72) {
+      let freshlyDecodedName = '';
+      if (userData && userData.length >= 72) {
+        // Exactly 24 bytes allocated for name in 72-byte packet
         const rawNameBuf = userData.subarray(11, 35);
-        const decoded = decodeArabicNameBuffer(rawNameBuf);
-        if (decoded) {
-          user.name = decoded;
-        }
+        freshlyDecodedName = decodeWorkerNameFromBuffer(rawNameBuf);
       }
+      // Strictly assign freshly decoded name (or empty string if machine has no name)
+      user.name = freshlyDecodedName;
       return user;
     };
   }
 
+  // Hook decodeUserData28: guarantee zero caching and explicit per-user name reset
   if (zktUtils && zktUtils.decodeUserData28) {
     const origDecode28 = zktUtils.decodeUserData28;
     zktUtils.decodeUserData28 = (userData) => {
       const user = origDecode28(userData);
-      if (user && userData.length >= 28) {
+      let freshlyDecodedName = '';
+      if (userData && userData.length >= 28) {
+        // Exactly 8 bytes allocated for name in 28-byte packet
         const rawNameBuf = userData.subarray(8, 16);
-        const decoded = decodeArabicNameBuffer(rawNameBuf);
-        if (decoded) {
-          user.name = decoded;
-        }
+        freshlyDecodedName = decodeWorkerNameFromBuffer(rawNameBuf);
       }
+      user.name = freshlyDecodedName;
       return user;
     };
   }
@@ -375,7 +397,8 @@ safeHandle('zkt-pull-users', async (event, { ip, port = 4370, timeout = 5000 }) 
         } else if (u.user_id !== undefined && u.user_id !== null && String(u.user_id).trim() !== '' && String(u.user_id).trim() !== '0') {
           resolvedUserId = String(u.user_id).trim();
         } else {
-          resolvedUserId = String(u.uid || idx + 1);
+          // No Badge Number / User ID was enrolled on keypad: leave empty so frontend applies machine prefix
+          resolvedUserId = '';
         }
 
         return {

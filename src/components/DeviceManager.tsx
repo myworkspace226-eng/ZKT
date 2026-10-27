@@ -292,8 +292,16 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
 
       if (onImportWorkers && res.users.length > 0) {
         const newWorkers: Worker[] = res.users.map((u, i) => {
-          // Strictly prioritize u.userId (Employee Code) as primary key, NOT internal slot uid
-          const userCode = Number(u.userId) || Number(u.uid) || (1000 + i);
+          // Check if worker has an explicit User ID (Badge Number) from the keypad
+          const rawUserIdStr = u.userId ? String(u.userId).trim() : '';
+          const hasValidUserId = rawUserIdStr !== '' && !isNaN(Number(rawUserIdStr)) && Number(rawUserIdStr) > 0;
+
+          // If no User ID was entered on machine keypad, generate a unique machine-scoped code: (device.id * 100000) + uid
+          // This strictly prevents slots on different machines (e.g. slot 1 on Machine A vs slot 1 on Machine B) from conflicting!
+          const userCode = hasValidUserId 
+            ? Number(rawUserIdStr) 
+            : (device.id * 100000) + Number(u.uid || i + 1);
+
           const cleanName = u.name ? u.name.trim() : '';
           const existing = (workers || []).find((w) => w.code === userCode || (w.aliasCodes && w.aliasCodes.includes(userCode)));
 
@@ -303,6 +311,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
             cleanName !== '' &&
             !cleanName.startsWith('عامل #') &&
             !cleanName.startsWith('عامل كود') &&
+            !cleanName.startsWith('عامل (') &&
             cleanName !== String(userCode) &&
             cleanName.length > 1
           );
@@ -312,19 +321,25 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
             existing?.name &&
             !existing.name.startsWith('عامل #') &&
             !existing.name.startsWith('عامل كود') &&
+            !existing.name.startsWith('عامل (') &&
             existing.name !== String(userCode) &&
             existing.name.length > 1
           );
 
+          // Fallback placeholder if neither machine nor database has a name
+          const fallbackPlaceholder = hasValidUserId
+            ? `عامل #${userCode}`
+            : `عامل (${device.name} - خانة #${u.uid || i + 1})`;
+
           // CRITICAL: If enrolled on machine B without name, PRESERVE the existing real name!
           const realName = existingHasRealName
             ? existing!.name
-            : (isCleanNameValid ? cleanName : (existing?.name || `عامل #${userCode}`));
+            : (isCleanNameValid ? cleanName : fallbackPlaceholder);
 
           const isEnglish = /^[A-Za-z\s.'-]+$/.test(realName) && realName.length > 2;
 
           return {
-            id: existing ? existing.id : `w-zkt-${device.id}-${userCode}`,
+            id: existing ? existing.id : `w-dev${device.id}-uid${u.uid || i + 1}-${userCode}`,
             code: existing ? existing.code : userCode,
             name: realName,
             department: existing?.department || device.department || 'إنتاج',
@@ -339,7 +354,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
             hasFingerprint: true,
             hasFace: existing ? existing.hasFace : false,
             joinDate: existing?.joinDate || new Date().toISOString().slice(0, 10),
-            isNameSyncedToDevice: Boolean(realName && !realName.startsWith('عامل #')),
+            isNameSyncedToDevice: Boolean(realName && !realName.startsWith('عامل #') && !realName.startsWith('عامل (')),
             enrolledOnDeviceName: device.name,
           };
         });

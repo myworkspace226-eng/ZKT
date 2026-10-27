@@ -261,16 +261,22 @@ export default function App() {
       if (res.success) {
         connectedCount++;
         const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
-          const userCodeNum = Number(r.userId) || (1000 + i);
-          const userCodeClean = String(r.userId || '').trim().replace(/^0+/, '');
+          const rawUserIdStr = String(r.userId || '').trim();
+          const userCodeNum = Number(rawUserIdStr) || 0;
+          const slotCodeOnThisDevice = (d.id * 100000) + userCodeNum;
+
           const matchedWorker = workers.find((w) => {
             const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
-            const isDirectMatch = w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
-            const isAliasMatch = Boolean(w.aliasCodes && (w.aliasCodes.includes(userCodeNum) || w.aliasCodes.some((ac) => String(ac).trim() === String(r.userId).trim())));
+            const isDirectMatch = w.code === userCodeNum || wCodeClean === rawUserIdStr || w.code === slotCodeOnThisDevice;
+            const isAliasMatch = Boolean(w.aliasCodes && (
+              w.aliasCodes.includes(userCodeNum) || 
+              w.aliasCodes.includes(slotCodeOnThisDevice) ||
+              w.aliasCodes.some((ac) => String(ac).trim() === rawUserIdStr)
+            ));
             return isDirectMatch || isAliasMatch;
           });
 
-          const canonicalCode = matchedWorker ? matchedWorker.code : userCodeNum;
+          const canonicalCode = matchedWorker ? matchedWorker.code : (userCodeNum || slotCodeOnThisDevice || (1000 + i));
           const realWorkerName = matchedWorker 
             ? matchedWorker.name 
             : `موظف #${r.userId}`;
@@ -383,16 +389,22 @@ export default function App() {
 
     if (res.success) {
       const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
-        const userCodeNum = Number(r.userId) || (1000 + i);
-        const userCodeClean = String(r.userId || '').trim().replace(/^0+/, '');
+        const rawUserIdStr = String(r.userId || '').trim();
+        const userCodeNum = Number(rawUserIdStr) || 0;
+        const slotCodeOnThisDevice = (target.id * 100000) + userCodeNum;
+
         const matchedWorker = workers.find((w) => {
           const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
-          const isDirectMatch = w.code === userCodeNum || wCodeClean === userCodeClean || String(w.code).trim() === String(r.userId).trim();
-          const isAliasMatch = Boolean(w.aliasCodes && (w.aliasCodes.includes(userCodeNum) || w.aliasCodes.some((ac) => String(ac).trim() === String(r.userId).trim())));
+          const isDirectMatch = w.code === userCodeNum || wCodeClean === rawUserIdStr || w.code === slotCodeOnThisDevice;
+          const isAliasMatch = Boolean(w.aliasCodes && (
+            w.aliasCodes.includes(userCodeNum) || 
+            w.aliasCodes.includes(slotCodeOnThisDevice) ||
+            w.aliasCodes.some((ac) => String(ac).trim() === rawUserIdStr)
+          ));
           return isDirectMatch || isAliasMatch;
         });
 
-        const canonicalCode = matchedWorker ? matchedWorker.code : userCodeNum;
+        const canonicalCode = matchedWorker ? matchedWorker.code : (userCodeNum || slotCodeOnThisDevice || (1000 + i));
         const realWorkerName = matchedWorker 
           ? matchedWorker.name 
           : `موظف #${r.userId}`;
