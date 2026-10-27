@@ -71,7 +71,8 @@ export interface AttendanceRecord {
   overtimeHours?: number;
   lateMinutes?: number;
   isMissedPunch?: boolean;
-  missedPunchType?: 'IN' | 'OUT';
+  isAmbiguousSinglePunch?: boolean;
+  missedPunchType?: 'IN' | 'OUT' | 'AMBIGUOUS';
   missedPunchReason?: string;
   isEarlyDeparture?: boolean;
   earlyDepartureMinutes?: number;
@@ -132,6 +133,7 @@ export interface FactorySettings {
   branchName: string;
   defaultGraceMinutes: number;
   earlyDepartureWindowMinutes: number; // e.g. 30 (from 16:00 to 16:30)
+  duplicateWindowMinutes: number; // e.g. 60 (cooldown to ignore duplicate punches)
   standardShiftStart: string; // "08:00"
   standardShiftEnd: string; // "16:30"
   bangladeshiShiftStart: string; // "08:00"

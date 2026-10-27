@@ -133,6 +133,7 @@ export const DEFAULT_FACTORY_SETTINGS: FactorySettings = {
   branchName: 'المبنى الرئيسي - خطوط الإنتاج',
   defaultGraceMinutes: 15,
   earlyDepartureWindowMinutes: 30,
+  duplicateWindowMinutes: 60,
   standardShiftStart: '08:00',
   standardShiftEnd: '16:30',
   bangladeshiShiftStart: '08:00',

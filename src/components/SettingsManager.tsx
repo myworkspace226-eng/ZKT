@@ -204,9 +204,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </div>
 
           {/* Policies & Windows */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs pt-1">
             <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
-              <label className="text-slate-300 font-medium block">فترة السماح العامة للتأخير</label>
+              <label className="text-slate-300 font-medium block">فترة السماح للتأخير</label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
@@ -234,7 +234,23 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 />
                 <span className="text-slate-400 text-[11px] shrink-0">دقيقة</span>
               </div>
-              <span className="text-[10px] text-slate-500 block">مثال: 30 د (من 16:00 إلى 16:30)</span>
+              <span className="text-[10px] text-slate-500 block">مثال: 30 د (قبل نهاية الوردية)</span>
+            </div>
+
+            <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
+              <label className="text-slate-300 font-medium block">استبعاد البصمات المكررة</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="5"
+                  max="180"
+                  value={formData.duplicateWindowMinutes ?? 60}
+                  onChange={(e) => setFormData({ ...formData, duplicateWindowMinutes: parseInt(e.target.value, 10) || 60 })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white font-mono text-center focus:border-blue-500"
+                />
+                <span className="text-slate-400 text-[11px] shrink-0">دقيقة</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">تجاهل تكرار البصمات خلال هذه المدة</span>
             </div>
 
             <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">

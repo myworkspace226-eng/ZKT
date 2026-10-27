@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Sidebar, ActiveTab, ActivityLogEntry } from './components/Sidebar';
 import { DashboardHUD } from './components/DashboardHUD';
@@ -25,10 +25,14 @@ import {
 } from './data/mockData';
 import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings } from './types';
 import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './services/deviceConnection';
+import { resolveSmartPunchState } from './utils/attendanceEngine';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   
+  // Workstation session start timestamp for volatile live feed (Point 2)
+  const sessionStartTimeRef = useRef<number>(Date.now());
+
   // Persist devices with localStorage so custom IPs and ports are remembered
   const [devices, setDevices] = useState<Device[]>(() => {
     try {
@@ -88,45 +92,60 @@ export default function App() {
   // Transient session-only live punches (never persisted to localStorage, resets on reload)
   const [liveSessionRecords, setLiveSessionRecords] = useState<AttendanceRecord[]>([]);
 
-  // Auto-save changes to localStorage
+  // Debounced auto-save to localStorage to prevent UI freezing during navigation and heavy operations (Point 1)
   useEffect(() => {
-    try {
-      localStorage.setItem('zkt_devices_v2', JSON.stringify(devices));
-    } catch (e) {
-      console.error('Error saving devices', e);
-    }
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_devices_v2', JSON.stringify(devices));
+      } catch (e) {
+        console.error('Error saving devices', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
   }, [devices]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('zkt_workers_v2', JSON.stringify(workers));
-    } catch (e) {
-      console.error('Error saving workers', e);
-    }
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_workers_v2', JSON.stringify(workers));
+      } catch (e) {
+        console.error('Error saving workers', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
   }, [workers]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('zkt_attendance_v2', JSON.stringify(attendanceRecords));
-    } catch (e) {
-      console.error('Error saving attendance', e);
-    }
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_attendance_v2', JSON.stringify(attendanceRecords));
+      } catch (e) {
+        console.error('Error saving attendance', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
   }, [attendanceRecords]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('zkt_shifts_v2', JSON.stringify(shifts));
-    } catch (e) {
-      console.error('Error saving shifts', e);
-    }
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_shifts_v2', JSON.stringify(shifts));
+      } catch (e) {
+        console.error('Error saving shifts', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
   }, [shifts]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('zkt_settings_v2', JSON.stringify(settings));
-    } catch (e) {
-      console.error('Error saving settings', e);
-    }
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_settings_v2', JSON.stringify(settings));
+      } catch (e) {
+        console.error('Error saving settings', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
   }, [settings]);
 
   const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([
@@ -232,10 +251,22 @@ export default function App() {
     };
   }, []);
 
+  // State reference cache for stable callbacks without triggering effect loops
+  const devicesRef = useRef(devices);
+  devicesRef.current = devices;
+  const attendanceRecordsRef = useRef(attendanceRecords);
+  attendanceRecordsRef.current = attendanceRecords;
+  const workersRef = useRef(workers);
+  workersRef.current = workers;
+  const shiftsRef = useRef(shifts);
+  shiftsRef.current = shifts;
+
   // 1. Parallel Sync from all machines (Real ZKTeco Communication)
-  const handleSyncAllDevices = async () => {
+  const handleSyncAllDevices = useCallback(async (silent: boolean = false) => {
     if (!isDesktopApp()) {
-      showNotification('سحب الحركات التلقائي عبر الشبكة متاح داخل تطبيق الديسكتوب. في المتصفح يمكنك استخدام "استيراد ملف USB".');
+      if (!silent) {
+        showNotification('سحب الحركات التلقائي عبر الشبكة متاح داخل تطبيق الديسكتوب. في المتصفح يمكنك استخدام "استيراد ملف USB".');
+      }
       return;
     }
 
@@ -249,14 +280,19 @@ export default function App() {
 
     let connectedCount = 0;
     let totalImported = 0;
-    // Build an indexed key set of existing records for O(1) lightning-fast duplicate checking
+    const currentAttendance = attendanceRecordsRef.current;
+    const currentWorkers = workersRef.current;
+    const currentDevices = devicesRef.current;
+    const currentShifts = shiftsRef.current;
+
+    // Build an indexed key set of existing records for O(1) duplicate checking
     const existingKeys = new Set(
-      attendanceRecords.map((ar) => `${ar.workerCode}_${ar.displayDate}_${ar.displayTime}_${ar.deviceId}`)
+      currentAttendance.map((ar) => `${ar.workerCode}_${ar.displayDate}_${ar.displayTime}_${ar.deviceId}`)
     );
     const allNewRecords: AttendanceRecord[] = [];
 
     // Query devices sequentially to keep socket communication stable
-    for (const d of devices) {
+    for (const d of currentDevices) {
       const res = await pullDeviceAttendanceLogs(d.ip, d.port);
       if (res.success) {
         connectedCount++;
@@ -265,7 +301,7 @@ export default function App() {
           const userCodeNum = Number(rawUserIdStr) || 0;
           const slotCodeOnThisDevice = (d.id * 100000) + userCodeNum;
 
-          const matchedWorker = workers.find((w) => {
+          const matchedWorker = currentWorkers.find((w) => {
             const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
             const isDirectMatch = w.code === userCodeNum || wCodeClean === rawUserIdStr || w.code === slotCodeOnThisDevice;
             const isAliasMatch = Boolean(w.aliasCodes && (
@@ -294,7 +330,11 @@ export default function App() {
           const dateObj = new Date(r.recordTime);
           const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
           const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
-          const punchState: 'IN' | 'OUT' = r.type === 1 ? 'OUT' : 'IN';
+
+          // FIX (Point 2 - Problem 2): r.state is direction (0: IN, 1: OUT). Evaluate through resolveSmartPunchState.
+          const rawState: 'IN' | 'OUT' = Number(r.state) === 1 ? 'OUT' : 'IN';
+          const matchedShift = currentShifts.find((s) => s.id === (matchedWorker?.shiftId || 'standard')) || currentShifts[0];
+          const smartState = resolveSmartPunchState(timeStr, rawState, matchedShift);
 
           return {
             id: `REC-${d.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
@@ -304,8 +344,8 @@ export default function App() {
             timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
             displayDate: dateStr,
             displayTime: timeStr,
-            rawState: punchState,
-            resolvedState: punchState,
+            rawState: rawState,
+            resolvedState: smartState.resolvedState,
             deviceId: d.id,
             deviceName: d.name,
             punchType: pType,
@@ -359,21 +399,39 @@ export default function App() {
 
     if (allNewRecords.length > 0) {
       setAttendanceRecords((prev) => [...allNewRecords, ...prev]);
-      setLiveSessionRecords((prev) => [...allNewRecords, ...prev]);
+
+      // Volatile Live Feed: only display punches with timestamp >= workstation session start (Point 2)
+      const sessionCutoff = sessionStartTimeRef.current - (2 * 60 * 1000);
+      const sessionPunches = allNewRecords.filter((p) => {
+        const pTime = new Date(p.timestamp).getTime();
+        return isNaN(pTime) || pTime >= sessionCutoff;
+      });
+      if (sessionPunches.length > 0) {
+        setLiveSessionRecords((prev) => [...sessionPunches, ...prev].slice(0, 500));
+      }
     }
 
     setIsSyncing(false);
 
-    if (connectedCount > 0) {
-      showNotification(`✅ تم الاتصال بـ ${connectedCount} من ${devices.length} ماكينات، وسحب ${totalImported} حركة جديدة إلى السجلات.`);
-    } else {
-      showNotification(`❌ تعذر الاتصال بالماكينات. تأكد أن كابلات الشبكة موصولة وأن الكمبيوتر على نفس الراوتر (LAN).`);
+    if (!silent) {
+      if (connectedCount > 0) {
+        showNotification(`✅ تم الاتصال بـ ${connectedCount} من ${currentDevices.length} ماكينات، وسحب ${totalImported} حركة جديدة إلى السجلات.`);
+      } else {
+        showNotification(`❌ تعذر الاتصال بالماكينات. تأكد أن كابلات الشبكة موصولة وأن الكمبيوتر على نفس الراوتر (LAN).`);
+      }
+    } else if (totalImported > 0) {
+      showNotification(`⚡ تم استلام ${totalImported} حركة بصمة حية جديدة`);
     }
-  };
+  }, []);
 
   // 2. Sync single device (Pull Real ZKTeco Attendance Records)
-  const handleSyncSingleDevice = async (deviceId: number) => {
-    const target = devices.find((d) => d.id === deviceId);
+  const handleSyncSingleDevice = useCallback(async (deviceId: number) => {
+    const currentDevices = devicesRef.current;
+    const currentWorkers = workersRef.current;
+    const currentAttendance = attendanceRecordsRef.current;
+    const currentShifts = shiftsRef.current;
+
+    const target = currentDevices.find((d) => d.id === deviceId);
     if (!target) return;
 
     if (!isDesktopApp()) {
@@ -393,7 +451,7 @@ export default function App() {
         const userCodeNum = Number(rawUserIdStr) || 0;
         const slotCodeOnThisDevice = (target.id * 100000) + userCodeNum;
 
-        const matchedWorker = workers.find((w) => {
+        const matchedWorker = currentWorkers.find((w) => {
           const wCodeClean = String(w.code || '').trim().replace(/^0+/, '');
           const isDirectMatch = w.code === userCodeNum || wCodeClean === rawUserIdStr || w.code === slotCodeOnThisDevice;
           const isAliasMatch = Boolean(w.aliasCodes && (
@@ -422,7 +480,11 @@ export default function App() {
         const dateObj = new Date(r.recordTime);
         const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
         const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
-        const punchState: 'IN' | 'OUT' = r.type === 1 ? 'OUT' : 'IN';
+
+        // FIX: In ZKTeco protocol, r.state is attendance state (0: Check-In, 1: Check-Out)
+        const rawState: 'IN' | 'OUT' = Number(r.state) === 1 ? 'OUT' : 'IN';
+        const matchedShift = currentShifts.find((s) => s.id === (matchedWorker?.shiftId || 'standard')) || currentShifts[0];
+        const smartState = resolveSmartPunchState(timeStr, rawState, matchedShift);
 
         return {
           id: `REC-${target.id}-${r.userId}-${dateStr}-${timeStr.replace(':', '')}-${i}`,
@@ -432,8 +494,8 @@ export default function App() {
           timestamp: !isNaN(dateObj.getTime()) ? dateObj.toISOString() : `${dateStr}T${timeStr}:00`,
           displayDate: dateStr,
           displayTime: timeStr,
-          rawState: punchState,
-          resolvedState: punchState,
+          rawState: rawState,
+          resolvedState: smartState.resolvedState,
           deviceId: target.id,
           deviceName: target.name,
           punchType: pType,
@@ -442,7 +504,7 @@ export default function App() {
       });
 
       const existingKeys = new Set(
-        attendanceRecords.map((ar) => `${ar.workerCode}_${ar.displayDate}_${ar.displayTime}_${ar.deviceId}`)
+        currentAttendance.map((ar) => `${ar.workerCode}_${ar.displayDate}_${ar.displayTime}_${ar.deviceId}`)
       );
       const newRecords = pulledRecords.filter((pr) => {
         const key = `${pr.workerCode}_${pr.displayDate}_${pr.displayTime}_${pr.deviceId}`;
@@ -451,7 +513,16 @@ export default function App() {
 
       if (newRecords.length > 0) {
         setAttendanceRecords((prev) => [...newRecords, ...prev]);
-        setLiveSessionRecords((prev) => [...newRecords, ...prev]);
+
+        // Volatile Live Feed: only display punches with timestamp >= workstation session start (Point 2)
+        const sessionCutoff = sessionStartTimeRef.current - (2 * 60 * 1000);
+        const sessionPunches = newRecords.filter((p) => {
+          const pTime = new Date(p.timestamp).getTime();
+          return isNaN(pTime) || pTime >= sessionCutoff;
+        });
+        if (sessionPunches.length > 0) {
+          setLiveSessionRecords((prev) => [...sessionPunches, ...prev].slice(0, 500));
+        }
       }
 
       const totalRecordCount = res.deviceInfo?.logCounts ?? res.records.length;
@@ -493,7 +564,7 @@ export default function App() {
       );
       showNotification(`❌ فشل سحب الحركات من (${target.name}): ${res.error || res.message}`);
     }
-  };
+  }, []);
 
   // 3. Attendance Records Handlers
   const handleAddManualRecord = (record: AttendanceRecord) => {
@@ -937,6 +1008,7 @@ export default function App() {
                 workers={workers}
                 devices={devices}
                 shiftEndTime={settings.standardShiftEnd}
+                settings={settings}
                 onAddManualRecord={handleAddManualRecord}
                 onUpdateRecord={handleUpdateRecord}
                 onDeleteRecord={handleDeleteRecord}

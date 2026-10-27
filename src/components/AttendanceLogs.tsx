@@ -23,7 +23,7 @@ import {
   CreditCard,
   AlertTriangle
 } from 'lucide-react';
-import { AttendanceRecord, Worker, Device } from '../types';
+import { AttendanceRecord, Worker, Device, FactorySettings } from '../types';
 import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
 
 interface AttendanceLogsProps {
@@ -31,6 +31,7 @@ interface AttendanceLogsProps {
   workers: Worker[];
   devices: Device[];
   shiftEndTime?: string;
+  settings?: FactorySettings;
   onAddManualRecord: (record: AttendanceRecord) => void;
   onUpdateRecord?: (record: AttendanceRecord) => void;
   onDeleteRecord?: (id: string) => void;
@@ -43,6 +44,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   workers,
   devices,
   shiftEndTime = '16:30',
+  settings,
   onAddManualRecord,
   onUpdateRecord,
   onDeleteRecord,
@@ -95,11 +97,20 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     return map;
   }, [workers]);
 
-  // Smart Attendance Processing (1-hour cooldown deduplication, 1st & last punch, overnight shifts, missed punches)
-  const { smartRecords, detectedDuplicatesCount, missedPunchesCount } = useMemo(() => {
-    const processed = processSmartAttendanceLogs(records, { shiftEndTime });
+  // Smart Attendance Processing (Dynamic Cooldown, 1st & Last Punch, Shift Reactivity, 3-zone Single Punch)
+  const { smartRecords, detectedDuplicatesCount, missedPunchesCount, ambiguousCount } = useMemo(() => {
+    const processed = processSmartAttendanceLogs(records, { 
+      shiftEndTime: settings?.standardShiftEnd || shiftEndTime,
+      bangladeshiShiftEnd: settings?.bangladeshiShiftEnd || '18:30',
+      earlyDepartureWindowMinutes: settings?.earlyDepartureWindowMinutes ?? 30,
+      duplicateWindowMinutes: settings?.duplicateWindowMinutes ?? 60,
+      overnightCutoffHour: settings?.overnightCutoffHour ?? 6,
+      workers,
+      workerMap,
+    });
     let dupCount = 0;
     let missedCount = 0;
+    let ambigCount = 0;
 
     const enriched = processed.map((rec) => {
       const worker = workerMap.get(rec.workerCode);
@@ -110,6 +121,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
       if (rec.isDuplicateIgnored) dupCount++;
       if (rec.isMissedPunch) missedCount++;
+      if (rec.isAmbiguousSinglePunch) ambigCount++;
 
       return {
         ...rec,
@@ -126,8 +138,13 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       return tB - tA;
     });
 
-    return { smartRecords: enriched, detectedDuplicatesCount: dupCount, missedPunchesCount: missedCount };
-  }, [records, workerMap]);
+    return { 
+      smartRecords: enriched, 
+      detectedDuplicatesCount: dupCount, 
+      missedPunchesCount: missedCount,
+      ambiguousCount: ambigCount
+    };
+  }, [records, workerMap, settings, shiftEndTime, workers]);
 
   // Filtered records by Date, Deduplication, Department, State, and Search
   const filteredRecords = useMemo(() => {
@@ -156,6 +173,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       // 4. Punch state & special filters
       if (selectedState === 'IN' && rec.resolvedState !== 'IN') return false;
       if (selectedState === 'OUT' && rec.resolvedState !== 'OUT') return false;
+      if (selectedState === 'AMBIGUOUS' && !rec.isAmbiguousSinglePunch) return false;
       if (selectedState === 'MISSED' && !rec.isMissedPunch) return false;
       if (selectedState === 'HR_OVERRIDE' && !rec.isHROverride && !rec.isManual) return false;
 
@@ -310,6 +328,25 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       onDeleteRecord(id);
     }
     setDeleteConfirmId(null);
+  };
+
+  const handleResolveAmbiguous = (record: AttendanceRecord, chosenDirection: 'IN' | 'OUT') => {
+    if (!onUpdateRecord) return;
+    const updatedRecord: AttendanceRecord = {
+      ...record,
+      rawState: chosenDirection,
+      resolvedState: chosenDirection,
+      isAmbiguousSinglePunch: false,
+      isHROverride: true,
+      isManual: true,
+      isMissedPunch: true,
+      missedPunchType: chosenDirection === 'IN' ? 'OUT' : 'IN',
+      missedPunchReason: chosenDirection === 'IN' 
+        ? 'تم اعتماد البصمة كحضور متأخر بواسطة HR (الانصراف مفقود)' 
+        : 'تم اعتماد البصمة كانصراف مبكر بواسطة HR (الحضور مفقود)',
+      manualNote: `اعتماد HR: ${chosenDirection === 'IN' ? 'حضور' : 'انصراف'}`,
+    };
+    onUpdateRecord(updatedRecord);
   };
 
   return (
@@ -517,6 +554,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           <option value="all">كل الحركات</option>
           <option value="IN">حضور فقط</option>
           <option value="OUT">انصراف فقط</option>
+          <option value="AMBIGUOUS">بصمات غامضة تحتاج قرار HR ({ambiguousCount})</option>
           <option value="MISSED">بصمات ناقصة ({missedPunchesCount})</option>
           <option value="HR_OVERRIDE">معتمد ومعدل يدوياً (HR)</option>
         </select>
@@ -571,7 +609,13 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   <tr 
                     key={record.id} 
                     className={`hover:bg-slate-850 transition-colors ${
-                      record.isDuplicateIgnored ? 'bg-amber-950/20 opacity-75' : record.isMissedPunch ? 'bg-rose-950/15' : ''
+                      record.isDuplicateIgnored 
+                        ? 'bg-amber-950/20 opacity-75' 
+                        : record.isAmbiguousSinglePunch
+                          ? 'bg-amber-950/30 border-l-2 border-amber-500'
+                          : record.isMissedPunch 
+                            ? 'bg-rose-950/15' 
+                            : ''
                     }`}
                   >
                     <td className="py-2 px-3 text-slate-300 font-bold">
@@ -589,12 +633,17 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                             </span>
                           )}
                         </div>
-                        {record.isMissedPunch && (
+                        {record.isAmbiguousSinglePunch ? (
+                          <span className="text-[9px] text-amber-300 font-sans flex items-center gap-1 font-semibold" title={record.missedPunchReason}>
+                            <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-amber-400" />
+                            <span>بصمة واحدة غامضة (منتصف الوردية)</span>
+                          </span>
+                        ) : record.isMissedPunch ? (
                           <span className="text-[9px] text-rose-400 font-sans flex items-center gap-1" title={record.missedPunchReason}>
                             <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
                             <span>{record.missedPunchReason || 'بصمة ناقصة'}</span>
                           </span>
-                        )}
+                        ) : null}
                         {record.isDuplicateIgnored && (
                           <span className="text-[9px] text-amber-400/80 font-sans">
                             {record.duplicateReason || 'تكرار مستبعد (أقل من ساعة)'}
@@ -612,18 +661,46 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                       {record.displayTime}
                     </td>
                     <td className="py-2 px-3 text-center">
-                      <div className="flex flex-col items-center gap-0.5">
-                        <span className={`text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block ${
-                          record.resolvedState === 'IN'
-                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-                        }`}>
-                          {record.resolvedState === 'IN' ? 'حضور' : 'انصراف'}
-                        </span>
-                        {record.isEarlyDeparture && (
-                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={record.earlyDepartureReason}>
-                            انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)
-                          </span>
+                      <div className="flex flex-col items-center gap-1">
+                        {record.isAmbiguousSinglePunch ? (
+                          <>
+                            <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              غير محددة (منتصف الوردية)
+                            </span>
+                            {onUpdateRecord && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleResolveAmbiguous(record, 'IN')}
+                                  className="px-1.5 py-0.5 rounded bg-emerald-600/30 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[9px] font-sans transition-colors cursor-pointer"
+                                  title="اعتماد كحضور متأخر"
+                                >
+                                  اعتماد حضور
+                                </button>
+                                <button
+                                  onClick={() => handleResolveAmbiguous(record, 'OUT')}
+                                  className="px-1.5 py-0.5 rounded bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/40 text-[9px] font-sans transition-colors cursor-pointer"
+                                  title="اعتماد كانصراف مبكر"
+                                >
+                                  اعتماد انصراف
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span className={`text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block ${
+                              record.resolvedState === 'IN'
+                                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                            }`}>
+                              {record.resolvedState === 'IN' ? 'حضور' : 'انصراف'}
+                            </span>
+                            {record.isEarlyDeparture && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={record.earlyDepartureReason}>
+                                انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)
+                              </span>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>

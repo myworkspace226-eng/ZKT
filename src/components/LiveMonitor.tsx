@@ -24,7 +24,7 @@ interface LiveMonitorProps {
   workers: Worker[];
   liveSessionRecords: AttendanceRecord[];
   onClearLiveSession?: () => void;
-  onSyncAll?: () => void;
+  onSyncAll?: (silent?: boolean) => void;
   isSyncing?: boolean;
 }
 
@@ -41,6 +41,18 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
   const [selectedMachineFilter, setSelectedMachineFilter] = useState<number | 'all'>('all');
 
   const prevCountRef = useRef<number>(liveSessionRecords.length);
+
+  // Auto-polling interval every 6 seconds while the Live Monitor is active
+  useEffect(() => {
+    if (!onSyncAll) return;
+    const intervalId = setInterval(() => {
+      onSyncAll(true);
+    }, 6000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [onSyncAll]);
 
   useEffect(() => {
     if (soundEnabled && liveSessionRecords.length > prevCountRef.current) {
@@ -122,7 +134,7 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
           {/* Real Sync Button */}
           {onSyncAll && (
             <button
-              onClick={onSyncAll}
+              onClick={() => onSyncAll()}
               disabled={isSyncing}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium cursor-pointer transition-colors shadow-sm"
             >

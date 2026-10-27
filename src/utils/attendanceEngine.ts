@@ -62,18 +62,27 @@ export function resolveSmartPunchState(
  */
 export interface SmartAttendanceOptions {
   shiftEndTime?: string; // e.g. "16:30"
+  shiftStartTime?: string; // e.g. "08:00"
+  bangladeshiShiftEnd?: string; // e.g. "18:30"
+  bangladeshiShiftStart?: string; // e.g. "08:00"
   earlyDepartureWindowMinutes?: number; // e.g. 30 (16:00 - 16:30)
+  duplicateWindowMinutes?: number; // default 60 min
   overnightCutoffHour?: number; // e.g. 6 (06:00 AM)
+  workers?: Worker[];
+  workerMap?: Map<number, Worker>;
   now?: Date;
 }
 
 /**
  * Smart Attendance Processing Engine (خوارزمية معالجة البصمات الذكية الاحترافية - V 4.0.0)
- * 1. 1-Hour Cooldown Deduplication: Ignore any punch occurring within < 60 minutes of previous accepted punch.
- * 2. Overnight Shifts Attachment: Punches between 00:00 and 05:59 AM attach to previous day as OUT if worker was checked in.
+ * 1. Cooldown Deduplication: Ignore any punch occurring within < duplicateWindowMinutes (default 60 min) of previous accepted punch.
+ * 2. Overnight Shifts Attachment: Punches between 00:00 and overnightCutoffHour (06:00 AM) attach to previous day as OUT.
  * 3. First & Last Punch: 1st punch = IN, last punch = OUT, intermediate punches = ignored.
- * 4. Delayed Missed Punch: Single IN punch only alerts as missed punch AFTER shift end (16:30) or on past days.
- * 5. Early Departure: Punches out between 16:00 and 16:30 get flagged with early departure badge.
+ * 4. Shift Reactivity: Reads shiftEndTime & bangladeshiShiftEnd dynamically from settings.
+ * 5. Ambiguous Single Punch (حالات البصمة الواحدة الغامضة):
+ *    - Morning (< 11:00 AM) -> IN.
+ *    - End of shift (>= shiftEnd - 45 min) -> OUT (missed IN).
+ *    - Mid-shift (11:00 AM to shiftEnd - 45 min) -> isAmbiguousSinglePunch = true (HR manual resolution required).
  * 6. HR Override Protection: isHROverride / isManual records are preserved exactly as set by HR.
  */
 export function processSmartAttendanceLogs(
@@ -91,12 +100,15 @@ export function processSmartAttendanceLogs(
   const d = String(now.getDate()).padStart(2, '0');
   const todayStr = `${y}-${m}-${d}`;
 
-  const shiftEndStr = options?.shiftEndTime || '16:30';
-  const [endH, endM] = shiftEndStr.split(':').map((v) => parseInt(v, 10) || 0);
-  const shiftEndTotalMinutes = endH * 60 + endM; // 990 (16:30)
+  const defaultShiftEndStr = options?.shiftEndTime || '16:30';
+  const bangladeshiShiftEndStr = options?.bangladeshiShiftEnd || '18:30';
   const earlyWindowMin = options?.earlyDepartureWindowMinutes ?? 30;
-  const earlyStartMinutes = shiftEndTotalMinutes - earlyWindowMin; // 960 (16:00)
   const overnightCutoff = options?.overnightCutoffHour ?? 6;
+  const duplicateWindowMinutes = options?.duplicateWindowMinutes ?? 60;
+  const duplicateWindowMs = duplicateWindowMinutes * 60 * 1000;
+
+  // Build lookup map for workers if provided
+  const workerLookup = options?.workerMap || (options?.workers ? new Map(options.workers.map((w) => [w.code, w])) : null);
 
   // Group records by workerCode
   const workerGroups = new Map<number, AttendanceRecord[]>();
@@ -111,7 +123,16 @@ export function processSmartAttendanceLogs(
 
   const processedAll: AttendanceRecord[] = [];
 
-  workerGroups.forEach((workerRecords) => {
+  workerGroups.forEach((workerRecords, workerCode) => {
+    // Determine worker specific shift
+    const workerObj = workerLookup?.get(workerCode);
+    const isBengali = workerObj?.nationality === 'بنغلاديشي' || workerObj?.shiftId === 'bangladeshi';
+    const effectiveShiftEndStr = isBengali ? bangladeshiShiftEndStr : defaultShiftEndStr;
+
+    const [endH, endM] = effectiveShiftEndStr.split(':').map((v) => parseInt(v, 10) || 0);
+    const shiftEndTotalMinutes = endH * 60 + endM;
+    const earlyStartMinutes = shiftEndTotalMinutes - earlyWindowMin;
+
     // 1. Sort all punches for this worker chronologically
     workerRecords.sort((a, b) => {
       const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
@@ -120,7 +141,7 @@ export function processSmartAttendanceLogs(
       return tA - tB;
     });
 
-    // 2. Deduplication (< 60 minutes / 1 hour rule)
+    // 2. Deduplication using dynamic duplicate window cooldown
     const validPunches: AttendanceRecord[] = [];
     let lastAcceptedTime: number | null = null;
 
@@ -140,10 +161,10 @@ export function processSmartAttendanceLogs(
         continue;
       }
 
-      // If less than 60 minutes from last accepted punch -> ignore as duplicate
-      if (lastAcceptedTime !== null && (punchTime - lastAcceptedTime) < 60 * 60 * 1000) {
+      // If less than duplicateWindowMinutes from last accepted punch -> ignore as duplicate
+      if (lastAcceptedTime !== null && (punchTime - lastAcceptedTime) < duplicateWindowMs) {
         rec.isDuplicateIgnored = true;
-        rec.duplicateReason = 'تكرار بصمة (أقل من ساعة واحدة)';
+        rec.duplicateReason = `تكرار بصمة (أقل من ${duplicateWindowMinutes} دقيقة)`;
         processedAll.push(rec);
       } else {
         rec.isDuplicateIgnored = false;
@@ -167,7 +188,7 @@ export function processSmartAttendanceLogs(
         curDate.setDate(curDate.getDate() - 1);
         const prevDayStr = curDate.toISOString().slice(0, 10);
 
-        // Any punch between 00:00 and overnightCutoff (e.g. 06:00 AM) belongs to the night shift of the previous day
+        // Any punch between 00:00 and overnightCutoff belongs to the night shift of previous day
         targetWorkDay = prevDayStr;
       }
 
@@ -191,7 +212,7 @@ export function processSmartAttendanceLogs(
         const diff = shiftEndTotalMinutes - punchMinutes;
         punch.isEarlyDeparture = true;
         punch.earlyDepartureMinutes = diff;
-        punch.earlyDepartureReason = `انصراف مبكر (-${diff} د) قبل موعد نهاية الوردية (${shiftEndStr})`;
+        punch.earlyDepartureReason = `انصراف مبكر (-${diff} د) قبل موعد نهاية الوردية (${effectiveShiftEndStr})`;
       } else {
         punch.isEarlyDeparture = false;
         punch.earlyDepartureMinutes = 0;
@@ -214,6 +235,7 @@ export function processSmartAttendanceLogs(
         const singlePunch = punchesOnDay[0];
 
         if (singlePunch.isHROverride) {
+          singlePunch.isAmbiguousSinglePunch = false;
           if (singlePunch.resolvedState === 'IN') {
             if (isPastShiftEnd) {
               singlePunch.isMissedPunch = true;
@@ -232,13 +254,15 @@ export function processSmartAttendanceLogs(
           return;
         }
 
-        const [hStr] = (singlePunch.displayTime || '08:00').split(':');
-        const hour = parseInt(hStr, 10) || 8;
+        const [pHStr, pMStr] = (singlePunch.displayTime || '08:00').split(':');
+        const pH = parseInt(pHStr, 10) || 8;
+        const pM = parseInt(pMStr, 10) || 0;
+        const punchMinutes = pH * 60 + pM;
 
-        if (hour < 12 || singlePunch.rawState === 'IN') {
-          // Morning / First Punch is IN
+        // Zone 1: Morning Check-in Window (Punch before 11:00 AM)
+        if (punchMinutes < 11 * 60) {
           singlePunch.resolvedState = 'IN';
-          // Point 4: Do NOT alert missed punch in mid-day! Only after shift end (16:30) or past days.
+          singlePunch.isAmbiguousSinglePunch = false;
           if (isPastShiftEnd) {
             singlePunch.isMissedPunch = true;
             singlePunch.missedPunchType = 'OUT';
@@ -248,14 +272,27 @@ export function processSmartAttendanceLogs(
             singlePunch.missedPunchReason = undefined;
           }
           singlePunch.isEarlyDeparture = false;
-        } else {
-          // Afternoon single punch without morning check-in
+        } 
+        // Zone 2: Shift-End Window (within 45 minutes of shift end or later, e.g. >= 15:45 for Egyptian, >= 17:45 for Bengali)
+        else if (punchMinutes >= (shiftEndTotalMinutes - 45)) {
           singlePunch.resolvedState = 'OUT';
+          singlePunch.isAmbiguousSinglePunch = false;
           singlePunch.isMissedPunch = true;
           singlePunch.missedPunchType = 'IN';
           singlePunch.missedPunchReason = 'بصمة حضور مفقودة (لم يسجل دخول في الصباح)';
           applyEarlyDepartureCheck(singlePunch);
+        } 
+        // Zone 3: Mid-Shift Ambiguous Punch (11:00 AM to shiftEnd - 45 min)
+        else {
+          // Do NOT guess! Tag as ambiguous single punch requiring HR decision
+          singlePunch.resolvedState = singlePunch.rawState || 'IN';
+          singlePunch.isAmbiguousSinglePunch = true;
+          singlePunch.isMissedPunch = true;
+          singlePunch.missedPunchType = 'AMBIGUOUS';
+          singlePunch.missedPunchReason = 'بصمة واحدة في منتصف الوردية (تحتاج قرار HR: حضور متأخر أم انصراف مبكر؟)';
+          singlePunch.isEarlyDeparture = false;
         }
+
         processedAll.push(singlePunch);
 
       } else {
@@ -266,6 +303,7 @@ export function processSmartAttendanceLogs(
         }
         firstPunch.isDuplicateIgnored = false;
         firstPunch.isMissedPunch = false;
+        firstPunch.isAmbiguousSinglePunch = false;
         firstPunch.missedPunchReason = undefined;
         firstPunch.isEarlyDeparture = false;
         processedAll.push(firstPunch);
@@ -276,21 +314,21 @@ export function processSmartAttendanceLogs(
         }
         lastPunch.isDuplicateIgnored = false;
         lastPunch.isMissedPunch = false;
+        lastPunch.isAmbiguousSinglePunch = false;
         lastPunch.missedPunchReason = undefined;
         // Check early departure for the OUT punch
         applyEarlyDepartureCheck(lastPunch);
         processedAll.push(lastPunch);
 
-        // Intermediate punches
+        // Any intermediate punches are ignored as intermediate
         for (let i = 1; i < punchesOnDay.length - 1; i++) {
           const midPunch = punchesOnDay[i];
-          if (midPunch.isHROverride) {
-            processedAll.push(midPunch);
-          } else {
+          if (!midPunch.isHROverride) {
             midPunch.isDuplicateIgnored = true;
             midPunch.duplicateReason = 'بصمة بينية (تم اعتماد الأولى كحضور والأخيرة كانصراف)';
-            processedAll.push(midPunch);
           }
+          midPunch.isAmbiguousSinglePunch = false;
+          processedAll.push(midPunch);
         }
       }
     });
