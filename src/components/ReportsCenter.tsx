@@ -28,7 +28,12 @@ import {
   SlidersHorizontal 
 } from 'lucide-react';
 import { Worker, AttendanceRecord, ShiftRule, AbsenceCategory, GatePass, Device } from '../types';
-import { exportToExcel, exportStyledExcel, calculateDailyPerformance } from '../utils/attendanceEngine';
+import { 
+  exportToExcel, 
+  exportStyledExcel, 
+  exportProfessionalAbsenceExcel, 
+  calculateDailyPerformance 
+} from '../utils/attendanceEngine';
 
 const ARABIC_WEEKDAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
@@ -48,6 +53,7 @@ interface ReportsCenterProps {
   shifts: ShiftRule[];
   gatePasses?: GatePass[];
   devices?: Device[];
+  factoryName?: string;
   onSyncDevices?: () => void;
   isSyncing?: boolean;
 }
@@ -58,6 +64,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   shifts,
   gatePasses = [],
   devices = [],
+  factoryName = 'مصنع الملابس الجاهزة',
   onSyncDevices,
   isSyncing = false,
 }) => {
@@ -274,28 +281,111 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     };
   }, [absentWorkersList, factoryStrength]);
 
-  const handleExportManagerReport = () => {
+  // Point 2: Advanced Real-time Filters for Daily Absence Report
+  const [absenceDeptFilter, setAbsenceDeptFilter] = useState<string>('all');
+  const [absenceLineFilter, setAbsenceLineFilter] = useState<string>('all');
+  const [absenceJobFilter, setAbsenceJobFilter] = useState<string>('all');
+  const [absenceCategoryFilter, setAbsenceCategoryFilter] = useState<string>('all');
+
+  const availableAbsenceDepartments = useMemo(() => {
+    return Array.from(new Set(workers.map((w) => w.department).filter(Boolean))).sort();
+  }, [workers]);
+
+  const availableAbsenceLines = useMemo(() => {
+    return Array.from(new Set(workers.map((w) => w.line).filter(Boolean))).sort();
+  }, [workers]);
+
+  const availableAbsenceJobs = useMemo(() => {
+    return Array.from(new Set(workers.map((w) => w.jobTitle).filter(Boolean))).sort();
+  }, [workers]);
+
+  // Real-time filtered absent workers list (combines search query and dropdown filters)
+  const filteredAbsentWorkersList = useMemo(() => {
+    return absentWorkersList.filter((worker) => {
+      if (absenceDeptFilter !== 'all' && worker.department !== absenceDeptFilter) return false;
+      if (absenceLineFilter !== 'all' && (worker.line || '-') !== absenceLineFilter) return false;
+      if (absenceJobFilter !== 'all' && worker.jobTitle !== absenceJobFilter) return false;
+      if (absenceCategoryFilter !== 'all' && worker.absenceCategory !== absenceCategoryFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        const matchName = worker.name.toLowerCase().includes(q);
+        const matchCode = String(worker.code).includes(q);
+        const matchDept = worker.department.toLowerCase().includes(q);
+        const matchLine = (worker.line || '').toLowerCase().includes(q);
+        const matchJob = (worker.jobTitle || '').toLowerCase().includes(q);
+        if (!matchName && !matchCode && !matchDept && !matchLine && !matchJob) return false;
+      }
+      return true;
+    });
+  }, [
+    absentWorkersList,
+    absenceDeptFilter,
+    absenceLineFilter,
+    absenceJobFilter,
+    absenceCategoryFilter,
+    searchQuery,
+  ]);
+
+  // Exact Tailwind color-coding for Absence Categories
+  // بدون إذن: خلفية حمراء bg-red-500 text-white
+  // اعتيادي: خلفية خضراء bg-green-500 text-white
+  // إجازة عارضة: خلفية أزرق فاتح bg-sky-300 text-black
+  // إجازة مرضية: خلفية بني فاتح bg-amber-200 text-black
+  // بإذن: خلفية بيضاء bg-white text-black
+  const getAbsenceCategoryStyle = (category: AbsenceCategory): string => {
+    switch (category) {
+      case 'unexcused':
+        return 'bg-red-500 text-white font-bold border-red-600';
+      case 'excused_annual':
+        return 'bg-green-500 text-white font-bold border-green-600';
+      case 'excused_casual':
+        return 'bg-sky-300 text-black font-bold border-sky-400';
+      case 'medical':
+        return 'bg-amber-200 text-black font-bold border-amber-300';
+      case 'official_pass':
+        return 'bg-white text-black font-bold border-slate-300';
+      default:
+        return 'bg-red-500 text-white font-bold';
+    }
+  };
+
+  const handleExportManagerReport = async () => {
     const categoryLabels: Record<AbsenceCategory, string> = {
       unexcused: 'بدون إذن',
       excused_casual: 'إجازة عارضة',
       excused_annual: 'إجازة اعتيادية',
-      official_pass: 'بتصريح / إذن معتمد',
-      medical: 'إجازة مرضي',
+      official_pass: 'بإذن',
+      medical: 'إجازة مرضية',
     };
 
-    const detailRows = absentWorkersList.map((w, idx) => ({
-      'م': idx + 1,
-      'كود العامل': w.code,
-      'الاسم': w.name,
-      'القسم': w.department,
-      'خط الإنتاج': w.line || '-',
-      'الوظيفة': w.jobTitle,
-      'الجنسية': w.nationality,
-      'نوع الغياب': categoryLabels[w.absenceCategory],
-      'الملاحظات': w.note || '-',
+    const targetList = filteredAbsentWorkersList;
+
+    const exportItems = targetList.map((w, idx) => ({
+      index: idx + 1,
+      code: w.code,
+      name: w.name,
+      department: w.department,
+      line: w.line || '-',
+      jobTitle: w.jobTitle,
+      nationality: w.nationality,
+      absenceCategory: categoryLabels[w.absenceCategory] || w.absenceCategory,
+      absenceKey: w.absenceCategory,
+      note: w.note || '-',
     }));
 
-    exportToExcel(detailRows, 'الغياب_اليومي', `تقرير_غياب_المصنع_${selectedDay}`, `تقرير الغياب اليومي - ${selectedDay}`);
+    await exportProfessionalAbsenceExcel(
+      {
+        factoryName: factoryName || 'مصنع الملابس الجاهزة',
+        reportDate: selectedDay,
+        totalWorkers: factoryStrength,
+        presentCount,
+        absentCount,
+        presentPercent,
+        absentPercent,
+        records: exportItems,
+      },
+      `تقرير_الغياب_اليومي_${selectedDay}`
+    );
   };
 
   // --------------------------------------------------------------------------
@@ -992,16 +1082,39 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             </div>
           </div>
 
-          {/* Absence Table Controls */}
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <UserX className="w-4 h-4 text-rose-400" />
-              <h3 className="text-xs font-bold text-white">
-                كشف العمال الغائبين اليوم ({absentWorkersList.length} عامل)
-              </h3>
+          {/* Absence Table Controls Bar (Point 2: Real-time Filters & Search) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <UserX className="w-4 h-4 text-rose-400" />
+                <h3 className="text-xs font-bold text-white">
+                  كشف العمال الغائبين اليوم
+                </h3>
+                <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                  {filteredAbsentWorkersList.length} من إجمالي {absentWorkersList.length} غائب
+                </span>
+              </div>
+
+              {(searchQuery || absenceDeptFilter !== 'all' || absenceLineFilter !== 'all' || absenceJobFilter !== 'all' || absenceCategoryFilter !== 'all') && (
+                <button
+                  onClick={() => {
+                    setSearchQuery('');
+                    setAbsenceDeptFilter('all');
+                    setAbsenceLineFilter('all');
+                    setAbsenceJobFilter('all');
+                    setAbsenceCategoryFilter('all');
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  إعادة ضبط الفلاتر
+                </button>
+              )}
             </div>
 
-            <div className="flex items-center gap-2">
+            {/* Filter Controls Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 pt-1">
+              {/* Real-time Search Box */}
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-2.5" />
                 <input
@@ -1009,15 +1122,79 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                   placeholder="بحث باسم العامل أو الكود أو القسم..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="bg-slate-950 border border-slate-700 rounded-lg pr-8 pl-3 py-1.5 text-xs text-white placeholder-slate-500 w-64 focus:border-blue-500"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg pr-8 pl-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-blue-500 outline-none"
                 />
+              </div>
+
+              {/* Department Dropdown Filter */}
+              <div>
+                <select
+                  value={absenceDeptFilter}
+                  onChange={(e) => setAbsenceDeptFilter(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:border-blue-500 outline-none"
+                >
+                  <option value="all">كل الأقسام</option>
+                  {availableAbsenceDepartments.map((dept) => (
+                    <option key={dept} value={dept}>
+                      {dept}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Line Dropdown Filter */}
+              <div>
+                <select
+                  value={absenceLineFilter}
+                  onChange={(e) => setAbsenceLineFilter(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:border-blue-500 outline-none"
+                >
+                  <option value="all">كل خطوط الإنتاج</option>
+                  {availableAbsenceLines.map((line) => (
+                    <option key={line} value={line}>
+                      خط {line}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Job Title Dropdown Filter */}
+              <div>
+                <select
+                  value={absenceJobFilter}
+                  onChange={(e) => setAbsenceJobFilter(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:border-blue-500 outline-none"
+                >
+                  <option value="all">كل الوظائف</option>
+                  {availableAbsenceJobs.map((job) => (
+                    <option key={job} value={job}>
+                      {job}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Absence Category Dropdown Filter */}
+              <div>
+                <select
+                  value={absenceCategoryFilter}
+                  onChange={(e) => setAbsenceCategoryFilter(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:border-blue-500 outline-none"
+                >
+                  <option value="all">كل تصنيفات الغياب</option>
+                  <option value="unexcused">بدون إذن</option>
+                  <option value="excused_annual">اعتيادي</option>
+                  <option value="excused_casual">إجازة عارضة</option>
+                  <option value="medical">إجازة مرضية</option>
+                  <option value="official_pass">بإذن</option>
+                </select>
               </div>
             </div>
           </div>
 
           {/* Absent Workers Table */}
           <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-            {absentWorkersList.length > 0 ? (
+            {filteredAbsentWorkersList.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
                   <thead>
@@ -1028,12 +1205,12 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                       <th className="py-2.5 px-3 font-semibold">القسم</th>
                       <th className="py-2.5 px-3 font-semibold">خط الإنتاج</th>
                       <th className="py-2.5 px-3 font-semibold">الوظيفة</th>
-                      <th className="py-2.5 px-3 font-semibold">تصنيف الغياب</th>
+                      <th className="py-2.5 px-3 font-semibold text-center">تصنيف الغياب</th>
                       <th className="py-2.5 px-3 font-semibold">ملاحظات والتصريح</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-sans">
-                    {absentWorkersList.map((worker, idx) => (
+                    {filteredAbsentWorkersList.map((worker, idx) => (
                       <tr key={worker.code} className="hover:bg-slate-850/60 transition-colors">
                         <td className="py-2 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
                         <td className="py-2 px-3 font-mono font-bold text-white">{worker.code}</td>
@@ -1041,17 +1218,17 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                         <td className="py-2 px-3 text-slate-300">{worker.department}</td>
                         <td className="py-2 px-3 font-mono text-slate-400">{worker.line || '-'}</td>
                         <td className="py-2 px-3 text-slate-400">{worker.jobTitle}</td>
-                        <td className="py-2 px-3">
+                        <td className="py-2 px-3 text-center">
                           <select
                             value={worker.absenceCategory}
                             onChange={(e) => handleUpdateWorkerAbsence(worker.code, e.target.value as AbsenceCategory)}
-                            className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:border-blue-500"
+                            className={`rounded px-2.5 py-1 text-xs cursor-pointer transition-all border outline-none shadow-sm ${getAbsenceCategoryStyle(worker.absenceCategory)}`}
                           >
-                            <option value="unexcused">بدون إذن (مخصوم)</option>
-                            <option value="excused_casual">إجازة عارضة</option>
-                            <option value="excused_annual">إجازة اعتيادية</option>
-                            <option value="official_pass">بتصريح / إذن معتمد</option>
-                            <option value="medical">إجازة مرضي</option>
+                            <option value="unexcused" className="bg-slate-900 text-white font-normal">بدون إذن</option>
+                            <option value="excused_annual" className="bg-slate-900 text-white font-normal">اعتيادي</option>
+                            <option value="excused_casual" className="bg-slate-900 text-white font-normal">إجازة عارضة</option>
+                            <option value="medical" className="bg-slate-900 text-white font-normal">إجازة مرضية</option>
+                            <option value="official_pass" className="bg-slate-900 text-white font-normal">بإذن</option>
                           </select>
                         </td>
                         <td className="py-2 px-3">
@@ -1060,7 +1237,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                             placeholder="سبب الغياب أو رقم الإذن..."
                             value={worker.note}
                             onChange={(e) => handleUpdateWorkerNote(worker.code, e.target.value)}
-                            className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white w-full focus:border-blue-500"
+                            className="bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-white w-full focus:border-blue-500 outline-none"
                           />
                         </td>
                       </tr>
@@ -1070,7 +1247,9 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
               </div>
             ) : (
               <div className="p-8 text-center text-xs text-slate-400">
-                لا يوجد غياب مسجل لهذا اليوم (حضور بنسبة 100%).
+                {absentWorkersList.length === 0 
+                  ? 'لا يوجد غياب مسجل لهذا اليوم (حضور بنسبة 100%).' 
+                  : 'لا توجد نتائج تطابق معايير البحث والفلترة المحددة.'}
               </div>
             )}
           </div>

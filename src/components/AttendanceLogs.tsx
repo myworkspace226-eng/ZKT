@@ -21,9 +21,14 @@ import {
   AlertCircle,
   ScanFace,
   CreditCard,
-  AlertTriangle
+  AlertTriangle,
+  History,
+  ArrowRightLeft,
+  HelpCircle,
+  CheckCheck,
+  ShieldCheck
 } from 'lucide-react';
-import { AttendanceRecord, Worker, Device, FactorySettings } from '../types';
+import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GatePass } from '../types';
 import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
 
 interface AttendanceLogsProps {
@@ -32,9 +37,12 @@ interface AttendanceLogsProps {
   devices: Device[];
   shiftEndTime?: string;
   settings?: FactorySettings;
+  auditLog?: HRAuditRecord[];
   onAddManualRecord: (record: AttendanceRecord) => void;
   onUpdateRecord?: (record: AttendanceRecord) => void;
   onDeleteRecord?: (id: string) => void;
+  onAddAuditRecord?: (record: HRAuditRecord) => void;
+  onAddGatePass?: (gatePass: GatePass) => void;
 }
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom';
@@ -45,16 +53,33 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   devices,
   shiftEndTime = '16:30',
   settings,
+  auditLog = [],
   onAddManualRecord,
   onUpdateRecord,
   onDeleteRecord,
+  onAddAuditRecord,
+  onAddGatePass,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
   const [selectedState, setSelectedState] = useState<string>('all');
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('all');
 
-  // Edit Punch Modal State (Point 5)
+  // Ambiguous Punch Resolution Modal State (Point 4)
+  const [resolvingRecord, setResolvingRecord] = useState<AttendanceRecord | null>(null);
+  const [resolutionChoice, setResolutionChoice] = useState<'temporary_pass' | 'final_out'>('temporary_pass');
+  const [expectedReturnTime, setExpectedReturnTime] = useState<string>('14:30');
+  const [passReason, setPassReason] = useState<string>('تصريح شخصي معتمد');
+
+  // Missing IN Quick Override Modal State (Point 5)
+  const [overridingRecord, setOverridingRecord] = useState<AttendanceRecord | null>(null);
+  const [overrideReason, setOverrideReason] = useState<string>('تأخر العامل عن بصمة الصباح وكان متواجداً بالعمل');
+
+  // Audit Log Modal State (Point 7)
+  const [showAuditModal, setShowAuditModal] = useState<boolean>(false);
+  const [auditSearchQuery, setAuditSearchQuery] = useState<string>('');
+
+  // Edit Punch Modal State
   const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null);
   const [editWorkerCode, setEditWorkerCode] = useState<number>(0);
   const [editDate, setEditDate] = useState<string>('');
@@ -98,12 +123,13 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   }, [workers]);
 
   // Smart Attendance Processing (Dynamic Cooldown, 1st & Last Punch, Shift Reactivity, 3-zone Single Punch)
-  const { smartRecords, detectedDuplicatesCount, missedPunchesCount, ambiguousCount } = useMemo(() => {
+  const { smartRecords, detectedDuplicatesCount, missedPunchesCount, ambiguousCount, missingInCount } = useMemo(() => {
     const processed = processSmartAttendanceLogs(records, { 
       shiftEndTime: settings?.standardShiftEnd || shiftEndTime,
       bangladeshiShiftEnd: settings?.bangladeshiShiftEnd || '18:30',
       earlyDepartureWindowMinutes: settings?.earlyDepartureWindowMinutes ?? 30,
       duplicateWindowMinutes: settings?.duplicateWindowMinutes ?? 60,
+      overtimeGraceMinutes: settings?.overtimeGraceMinutes ?? 30,
       overnightCutoffHour: settings?.overnightCutoffHour ?? 6,
       workers,
       workerMap,
@@ -111,6 +137,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     let dupCount = 0;
     let missedCount = 0;
     let ambigCount = 0;
+    let missingCount = 0;
 
     const enriched = processed.map((rec) => {
       const worker = workerMap.get(rec.workerCode);
@@ -122,6 +149,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       if (rec.isDuplicateIgnored) dupCount++;
       if (rec.isMissedPunch) missedCount++;
       if (rec.isAmbiguousSinglePunch) ambigCount++;
+      if (rec.missingInPunch) missingCount++;
 
       return {
         ...rec,
@@ -142,7 +170,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       smartRecords: enriched, 
       detectedDuplicatesCount: dupCount, 
       missedPunchesCount: missedCount,
-      ambiguousCount: ambigCount
+      ambiguousCount: ambigCount,
+      missingInCount: missingCount
     };
   }, [records, workerMap, settings, shiftEndTime, workers]);
 
@@ -174,6 +203,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       if (selectedState === 'IN' && rec.resolvedState !== 'IN') return false;
       if (selectedState === 'OUT' && rec.resolvedState !== 'OUT') return false;
       if (selectedState === 'AMBIGUOUS' && !rec.isAmbiguousSinglePunch) return false;
+      if (selectedState === 'MISSING_IN' && !rec.missingInPunch) return false;
       if (selectedState === 'MISSED' && !rec.isMissedPunch) return false;
       if (selectedState === 'HR_OVERRIDE' && !rec.isHROverride && !rec.isManual) return false;
 
@@ -271,6 +301,27 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     };
 
     onAddManualRecord(newRecord);
+
+    // Audit Log Entry (Point 7)
+    if (onAddAuditRecord) {
+      onAddAuditRecord({
+        id: `audit-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        displayTime: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+        displayDate: new Date().toISOString().slice(0, 10),
+        modifiedBy: manualEditor || 'مسؤول الموارد البشرية',
+        workerCode: worker.code,
+        workerName: worker.name,
+        recordId: newRecord.id,
+        recordDate: manualDate,
+        recordTime: manualTime,
+        actionType: 'ADD_MANUAL_PUNCH',
+        oldValue: 'لا يوجد',
+        newValue: `${manualType === 'IN' ? 'حضور' : 'انصراف'} (${manualTime})`,
+        reason: manualReason || 'إضافة حركة يدوية مباشرة',
+      });
+    }
+
     setShowManualModal(false);
     setManualReason('');
   };
@@ -294,6 +345,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const worker = workerMap.get(editWorkerCode);
     const device = devices.find((d) => d.id === editDeviceId);
 
+    const oldDesc = `${editingRecord.resolvedState === 'IN' ? 'حضور' : 'انصراف'} (${editingRecord.displayTime})`;
+    const newDesc = `${editState === 'IN' ? 'حضور' : 'انصراف'} (${editTime})`;
+
     const updatedRecord: AttendanceRecord = {
       ...editingRecord,
       workerCode: editWorkerCode,
@@ -310,6 +364,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       isManual: true,
       isHROverride: true,
       isMissedPunch: false,
+      missingInPunch: false,
       isDuplicateIgnored: false,
       lateMinutes: editState === 'IN' && editLateMinutes > 0 ? editLateMinutes : undefined,
       overtimeHours: editOvertimeHours > 0 ? editOvertimeHours : undefined,
@@ -320,33 +375,208 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     if (onUpdateRecord) {
       onUpdateRecord(updatedRecord);
     }
+
+    // Audit Log Entry (Point 7)
+    if (onAddAuditRecord) {
+      onAddAuditRecord({
+        id: `audit-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        displayTime: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+        displayDate: new Date().toISOString().slice(0, 10),
+        modifiedBy: 'مسؤول الموارد البشرية',
+        workerCode: editWorkerCode,
+        workerName: worker ? worker.name : editingRecord.workerName,
+        recordId: editingRecord.id,
+        recordDate: editDate,
+        recordTime: editTime,
+        actionType: 'MANUAL_EDIT',
+        oldValue: oldDesc,
+        newValue: newDesc,
+        reason: editNote.trim() || 'تعديل بيانات البصمة يدوياً',
+      });
+    }
+
     setEditingRecord(null);
   };
 
   const handleDeletePunch = (id: string) => {
+    const target = records.find((r) => r.id === id);
     if (onDeleteRecord) {
       onDeleteRecord(id);
     }
+
+    // Audit Log Entry (Point 7)
+    if (onAddAuditRecord && target) {
+      onAddAuditRecord({
+        id: `audit-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        displayTime: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+        displayDate: new Date().toISOString().slice(0, 10),
+        modifiedBy: 'مسؤول الموارد البشرية',
+        workerCode: target.workerCode,
+        workerName: target.workerName,
+        recordId: target.id,
+        recordDate: target.displayDate,
+        recordTime: target.displayTime,
+        actionType: 'DELETE_PUNCH',
+        oldValue: `${target.resolvedState === 'IN' ? 'حضور' : 'انصراف'} (${target.displayTime})`,
+        newValue: 'حذف نهائي من السجلات',
+        reason: 'حذف حركة بصمة خاطئة أو مكررة يدوياً',
+      });
+    }
+
     setDeleteConfirmId(null);
   };
 
-  const handleResolveAmbiguous = (record: AttendanceRecord, chosenDirection: 'IN' | 'OUT') => {
-    if (!onUpdateRecord) return;
-    const updatedRecord: AttendanceRecord = {
-      ...record,
-      rawState: chosenDirection,
-      resolvedState: chosenDirection,
-      isAmbiguousSinglePunch: false,
+  // Point 4: Ambiguous Window Resolution Popup Handler
+  const handleConfirmAmbiguousResolution = () => {
+    if (!resolvingRecord || !onUpdateRecord) return;
+    const worker = workerMap.get(resolvingRecord.workerCode);
+    const workerName = worker?.name || resolvingRecord.workerName;
+    const nowIso = new Date().toISOString();
+    const curTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+    const curDate = new Date().toISOString().slice(0, 10);
+
+    if (resolutionChoice === 'temporary_pass') {
+      const passId = `pass-${Date.now()}`;
+      const updated: AttendanceRecord = {
+        ...resolvingRecord,
+        rawState: 'OUT',
+        resolvedState: 'OUT',
+        isAmbiguousSinglePunch: false,
+        ambiguousResolution: 'temporary_pass',
+        expectedReturnTime: expectedReturnTime,
+        linkedPermissionId: passId,
+        isHROverride: true,
+        isManual: true,
+        isMissedPunch: false,
+        missedPunchReason: undefined,
+        manualNote: `تصريح خروج مؤقت (عودة متوقعة: ${expectedReturnTime}) - ${passReason}`,
+      };
+      onUpdateRecord(updated);
+
+      // Create Gate Pass automatically
+      if (onAddGatePass) {
+        const newPass: GatePass = {
+          id: passId,
+          workerCode: resolvingRecord.workerCode,
+          workerName: workerName,
+          department: resolvingRecord.department,
+          date: resolvingRecord.displayDate,
+          exitTime: resolvingRecord.displayTime,
+          returnTime: expectedReturnTime,
+          type: 'temporary',
+          reason: 'personal_excused',
+          reasonText: passReason,
+          approvedBy: 'مسؤول الموارد البشرية',
+          status: 'active',
+        };
+        onAddGatePass(newPass);
+      }
+
+      // Record in Audit Log (Point 7)
+      if (onAddAuditRecord) {
+        onAddAuditRecord({
+          id: `audit-${Date.now()}`,
+          timestamp: nowIso,
+          displayTime: curTime,
+          displayDate: curDate,
+          modifiedBy: 'مسؤول الموارد البشرية',
+          workerCode: resolvingRecord.workerCode,
+          workerName: workerName,
+          recordId: resolvingRecord.id,
+          recordDate: resolvingRecord.displayDate,
+          recordTime: resolvingRecord.displayTime,
+          actionType: 'RESOLVE_AMBIGUOUS_PASS',
+          oldValue: 'بصمة في نافذة الغموض (12:00-15:59)',
+          newValue: `تصريح مؤقت حتى ${expectedReturnTime}`,
+          reason: passReason,
+        });
+      }
+    } else {
+      // Final OUT
+      const updated: AttendanceRecord = {
+        ...resolvingRecord,
+        rawState: 'OUT',
+        resolvedState: 'OUT',
+        isAmbiguousSinglePunch: false,
+        ambiguousResolution: 'final_out',
+        isHROverride: true,
+        isManual: true,
+        isMissedPunch: false,
+        missedPunchReason: undefined,
+        manualNote: 'انصراف نهائي معتمد (إغلاق يوم العامل)',
+      };
+      onUpdateRecord(updated);
+
+      // Record in Audit Log (Point 7)
+      if (onAddAuditRecord) {
+        onAddAuditRecord({
+          id: `audit-${Date.now()}`,
+          timestamp: nowIso,
+          displayTime: curTime,
+          displayDate: curDate,
+          modifiedBy: 'مسؤول الموارد البشرية',
+          workerCode: resolvingRecord.workerCode,
+          workerName: workerName,
+          recordId: resolvingRecord.id,
+          recordDate: resolvingRecord.displayDate,
+          recordTime: resolvingRecord.displayTime,
+          actionType: 'RESOLVE_AMBIGUOUS_OUT',
+          oldValue: 'بصمة في نافذة الغموض (12:00-15:59)',
+          newValue: 'انصراف نهائي',
+          reason: 'اعتماد انصراف نهائي وإغلاق اليوم',
+        });
+      }
+    }
+
+    setResolvingRecord(null);
+  };
+
+  // Point 5: Missing IN Manual Override Handler
+  const handleConfirmOverrideToIn = () => {
+    if (!overridingRecord || !onUpdateRecord) return;
+    const worker = workerMap.get(overridingRecord.workerCode);
+    const workerName = worker?.name || overridingRecord.workerName;
+    const nowIso = new Date().toISOString();
+    const curTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+    const curDate = new Date().toISOString().slice(0, 10);
+
+    const updated: AttendanceRecord = {
+      ...overridingRecord,
+      rawState: 'IN',
+      resolvedState: 'IN',
+      missingInPunch: false,
+      isMissedPunch: true,
+      missedPunchType: 'OUT',
+      missedPunchReason: 'تم تعديل البصمة إلى حضور بواسطة HR (الانصراف مفقود)',
       isHROverride: true,
       isManual: true,
-      isMissedPunch: true,
-      missedPunchType: chosenDirection === 'IN' ? 'OUT' : 'IN',
-      missedPunchReason: chosenDirection === 'IN' 
-        ? 'تم اعتماد البصمة كحضور متأخر بواسطة HR (الانصراف مفقود)' 
-        : 'تم اعتماد البصمة كانصراف مبكر بواسطة HR (الحضور مفقود)',
-      manualNote: `اعتماد HR: ${chosenDirection === 'IN' ? 'حضور' : 'انصراف'}`,
+      manualNote: `تعديل HR إلى حضور: ${overrideReason}`,
     };
-    onUpdateRecord(updatedRecord);
+    onUpdateRecord(updated);
+
+    // Record in Audit Log (Point 7)
+    if (onAddAuditRecord) {
+      onAddAuditRecord({
+        id: `audit-${Date.now()}`,
+        timestamp: nowIso,
+        displayTime: curTime,
+        displayDate: curDate,
+        modifiedBy: 'مسؤول الموارد البشرية',
+        workerCode: overridingRecord.workerCode,
+        workerName: workerName,
+        recordId: overridingRecord.id,
+        recordDate: overridingRecord.displayDate,
+        recordTime: overridingRecord.displayTime,
+        actionType: 'OVERRIDE_OUT_TO_IN',
+        oldValue: 'انصراف (بصمة حضور ناقصة Missing IN)',
+        newValue: 'حضور (معتمد HR)',
+        reason: overrideReason,
+      });
+    }
+
+    setOverridingRecord(null);
   };
 
   return (
@@ -422,6 +652,16 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
               <span>تصدير Excel ({filteredRecords.length})</span>
             </button>
           )}
+
+          {/* HR Audit Log Modal Button (Point 7) */}
+          <button
+            onClick={() => setShowAuditModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-900/30 hover:bg-purple-900/50 text-purple-300 text-xs font-medium border border-purple-700/50 transition-colors cursor-pointer"
+            title="سجل تدقيق تعديلات الموارد البشرية (Audit Log)"
+          >
+            <History className="w-3.5 h-3.5 text-purple-400" />
+            <span>سجل التدقيق ({auditLog.length})</span>
+          </button>
         </div>
       </div>
 
@@ -555,6 +795,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           <option value="IN">حضور فقط</option>
           <option value="OUT">انصراف فقط</option>
           <option value="AMBIGUOUS">بصمات غامضة تحتاج قرار HR ({ambiguousCount})</option>
+          <option value="MISSING_IN">بصمات حضور ناقصة ({missingInCount})</option>
           <option value="MISSED">بصمات ناقصة ({missedPunchesCount})</option>
           <option value="HR_OVERRIDE">معتمد ومعدل يدوياً (HR)</option>
         </select>
@@ -633,10 +874,56 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                             </span>
                           )}
                         </div>
-                        {record.isAmbiguousSinglePunch ? (
-                          <span className="text-[9px] text-amber-300 font-sans flex items-center gap-1 font-semibold" title={record.missedPunchReason}>
-                            <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-amber-400" />
-                            <span>بصمة واحدة غامضة (منتصف الوردية)</span>
+                        {record.missingInPunch ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] px-2 py-0.5 rounded bg-rose-600 text-white font-sans font-bold flex items-center gap-1 border border-rose-700 animate-pulse">
+                              <AlertCircle className="w-3 h-3" />
+                              <span>بصمة حضور ناقصة (Missing IN)</span>
+                            </span>
+                            {onUpdateRecord && (
+                              <button
+                                onClick={() => {
+                                  setOverridingRecord(record);
+                                  setOverrideReason('تأخر العامل عن بصمة الصباح وكان متواجداً بالعمل');
+                                }}
+                                className="px-2 py-0.5 rounded bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-700 text-[10px] font-sans font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                                title="تعديل يدوي من انصراف إلى حضور"
+                              >
+                                <ArrowRightLeft className="w-3 h-3" />
+                                <span>تعديل إلى حضور</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : record.isAmbiguousSinglePunch ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-sans font-bold flex items-center gap-1 border border-amber-500/40">
+                              <HelpCircle className="w-3 h-3 text-amber-400" />
+                              <span>نافذة الغموض (12:00-15:59)</span>
+                            </span>
+                            {onUpdateRecord && (
+                              <button
+                                onClick={() => {
+                                  setResolvingRecord(record);
+                                  setResolutionChoice('temporary_pass');
+                                  setExpectedReturnTime('14:30');
+                                  setPassReason('تصريح شخصي معتمد');
+                                }}
+                                className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-sans font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-sm"
+                                title="تحديد نوع البصمة: تصريح مؤقت أم انصراف نهائي؟"
+                              >
+                                <HelpCircle className="w-3 h-3" />
+                                <span>تحديد نوع الحركة (HR)</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : record.isReturnFromPass ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-sans font-bold border border-cyan-500/40 flex items-center gap-1 w-fit">
+                            <CheckCheck className="w-2.5 h-2.5" />
+                            <span>حضور بعد تصريح</span>
+                          </span>
+                        ) : record.ambiguousResolution === 'temporary_pass' ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-sans font-medium border border-amber-500/30 flex items-center gap-1 w-fit">
+                            <span>تصريح مؤقت (خروج)</span>
                           </span>
                         ) : record.isMissedPunch ? (
                           <span className="text-[9px] text-rose-400 font-sans flex items-center gap-1" title={record.missedPunchReason}>
@@ -663,29 +950,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                     <td className="py-2 px-3 text-center">
                       <div className="flex flex-col items-center gap-1">
                         {record.isAmbiguousSinglePunch ? (
-                          <>
-                            <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                              غير محددة (منتصف الوردية)
-                            </span>
-                            {onUpdateRecord && (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => handleResolveAmbiguous(record, 'IN')}
-                                  className="px-1.5 py-0.5 rounded bg-emerald-600/30 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[9px] font-sans transition-colors cursor-pointer"
-                                  title="اعتماد كحضور متأخر"
-                                >
-                                  اعتماد حضور
-                                </button>
-                                <button
-                                  onClick={() => handleResolveAmbiguous(record, 'OUT')}
-                                  className="px-1.5 py-0.5 rounded bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/40 text-[9px] font-sans transition-colors cursor-pointer"
-                                  title="اعتماد كانصراف مبكر"
-                                >
-                                  اعتماد انصراف
-                                </button>
-                              </div>
-                            )}
-                          </>
+                          <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                            بانتظار قرار HR
+                          </span>
                         ) : (
                           <>
                             <span className={`text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block ${
@@ -698,6 +965,11 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                             {record.isEarlyDeparture && (
                               <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={record.earlyDepartureReason}>
                                 انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)
+                              </span>
+                            )}
+                            {record.isOvertime && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-sans font-bold" title={`إضافي: ${record.overtimeHours} ساعة`}>
+                                +{record.overtimeHours} س إضافي
                               </span>
                             )}
                           </>
@@ -1095,6 +1367,404 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 className="px-3.5 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-medium cursor-pointer"
               >
                 تأكيد الحذف
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Point 4: Ambiguous Window Resolution Modal */}
+      {resolvingRecord && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-amber-400">
+                <HelpCircle className="w-5 h-5" />
+                <h3 className="text-sm font-bold text-white">
+                  نافذة الغموض والتصاريح (12:00 - 15:59)
+                </h3>
+              </div>
+              <button 
+                onClick={() => setResolvingRecord(null)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Worker Details Card */}
+            <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-3 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">العامل:</span>
+                <span className="font-bold text-white font-sans">
+                  {resolvingRecord.workerName} (كود #{resolvingRecord.workerCode})
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">وقت وتاريخ البصمة:</span>
+                <span className="font-mono text-amber-300 font-bold">
+                  {resolvingRecord.displayDate} @ {resolvingRecord.displayTime}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">القسم:</span>
+                <span className="text-slate-300 font-sans">{resolvingRecord.department}</span>
+              </div>
+            </div>
+
+            {/* Question Prompt */}
+            <div className="bg-amber-950/30 border border-amber-500/30 rounded-lg p-3 text-xs text-amber-200">
+              <p className="font-bold mb-1">سؤال الموارد البشرية (HR Decision):</p>
+              <p>البصمة دي تصريح مؤقت (بعودة) ولا انصراف نهائي؟</p>
+            </div>
+
+            {/* Selection Options */}
+            <div className="space-y-2.5 text-xs">
+              <label 
+                onClick={() => setResolutionChoice('temporary_pass')}
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  resolutionChoice === 'temporary_pass' 
+                    ? 'bg-blue-950/40 border-blue-500 text-white' 
+                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="ambiguous_choice"
+                  checked={resolutionChoice === 'temporary_pass'}
+                  onChange={() => setResolutionChoice('temporary_pass')}
+                  className="mt-0.5 text-blue-600 focus:ring-blue-500"
+                />
+                <div className="space-y-1">
+                  <span className="font-bold text-sm block">1. تصريح مؤقت (بعودة)</span>
+                  <span className="text-[11px] text-slate-400 block">
+                    يتم تسجيل خروج مؤقت وإصدار تصريح، واستثناء بصمة العودة من قاعدة التكرار لتسجيلها كـ "حضور بعد تصريح".
+                  </span>
+                </div>
+              </label>
+
+              {resolutionChoice === 'temporary_pass' && (
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2.5 text-xs mr-4">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-medium">وقت العودة المتوقع:</label>
+                    <input
+                      type="time"
+                      value={expectedReturnTime}
+                      onChange={(e) => setExpectedReturnTime(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white font-mono"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-medium">سبب أو مبرر التصريح:</label>
+                    <input
+                      type="text"
+                      value={passReason}
+                      onChange={(e) => setPassReason(e.target.value)}
+                      placeholder="مثلاً: مهمة عمل رسمية، عيادة التأمين، إذن شخصي..."
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white"
+                      required
+                    />
+                  </div>
+                </div>
+              )}
+
+              <label 
+                onClick={() => setResolutionChoice('final_out')}
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  resolutionChoice === 'final_out' 
+                    ? 'bg-blue-950/40 border-blue-500 text-white' 
+                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="ambiguous_choice"
+                  checked={resolutionChoice === 'final_out'}
+                  onChange={() => setResolutionChoice('final_out')}
+                  className="mt-0.5 text-blue-600 focus:ring-blue-500"
+                />
+                <div className="space-y-1">
+                  <span className="font-bold text-sm block">2. انصراف نهائي</span>
+                  <span className="text-[11px] text-slate-400 block">
+                    تسجيل انصراف نهائي للعامل وإغلاق اليوم بدون انتظار عودة.
+                  </span>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setResolvingRecord(null)}
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmAmbiguousResolution}
+                className="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold cursor-pointer transition-colors"
+              >
+                تأكيد واعتماد القرار وتوثيق التدقيق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Point 5: Missing IN Manual Override Modal */}
+      {overridingRecord && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-rose-400">
+                <ArrowRightLeft className="w-5 h-5" />
+                <h3 className="text-sm font-bold text-white">
+                  تصحيح بصمة الحضور الناقصة (Missing IN)
+                </h3>
+              </div>
+              <button 
+                onClick={() => setOverridingRecord(null)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-rose-950/30 border border-rose-500/30 rounded-lg p-3 text-xs text-rose-200">
+              <p className="font-bold mb-1">تنبيه النظام:</p>
+              <p>
+                تم رصد بصمة انصراف للعامل في فترة ما بعد الظهر دون وجود بصمة حضور صباحية.
+                يمكنك الآن تحويل هذه البصمة لتكون "حضور" (IN) لتوثيق تواجده الفعلي بالعمل.
+              </p>
+            </div>
+
+            {/* Worker Info */}
+            <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">العامل:</span>
+                <span className="font-bold text-white">{overridingRecord.workerName} (#{overridingRecord.workerCode})</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">تاريخ ووقت البصمة:</span>
+                <span className="font-mono text-rose-300 font-bold">{overridingRecord.displayDate} @ {overridingRecord.displayTime}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">القسم:</span>
+                <span className="text-slate-300">{overridingRecord.department}</span>
+              </div>
+            </div>
+
+            {/* Override Reason Input */}
+            <div className="text-xs space-y-1">
+              <label className="text-slate-300 block font-medium">سبب تحويل الحركة إلى حضور (يوثق في سجل التدقيق):</label>
+              <input
+                type="text"
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="مثلاً: تأخر العامل عن بصمة الصباح وكان متواجداً بالعمل، عطل ماكينة..."
+                className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white outline-none focus:border-rose-500"
+                required
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setOverridingRecord(null)}
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmOverrideToIn}
+                className="px-4 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-bold cursor-pointer transition-colors"
+              >
+                تحويل إلى حضور (IN) وتوثيق التدقيق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Point 7: HR Audit Log Modal (سجل تدقيق التعديلات) */}
+      {showAuditModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950/60">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                  <History className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>سجل تدقيق تعديلات الموارد البشرية (HR Audit Log)</span>
+                    <span className="px-2 py-0.5 rounded-full bg-purple-900/40 text-purple-300 text-xs font-mono border border-purple-700/50">
+                      {auditLog.length} تعديل موثق
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    توثيق كامل لكافة التعديلات اليدوية، تغيير نوع الحركات، واعتمادات نافذة الغموض
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowAuditModal(false)}
+                className="text-slate-400 hover:text-white text-base cursor-pointer p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Audit Toolbar */}
+            <div className="p-3 bg-slate-950/40 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={auditSearchQuery}
+                  onChange={(e) => setAuditSearchQuery(e.target.value)}
+                  placeholder="بحث في سجل التدقيق باسم العامل أو الكود أو نوع الإجراء..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded pr-8 pl-3 py-1.5 text-xs text-slate-200 outline-none focus:border-purple-500"
+                />
+              </div>
+
+              {auditLog.length > 0 && (
+                <button
+                  onClick={() => {
+                    const exportData = auditLog.map((item, idx) => ({
+                      'م': idx + 1,
+                      'التاريخ والوقت': `${item.displayDate} ${item.displayTime}`,
+                      'المنفذ': item.modifiedBy,
+                      'كود العامل': item.workerCode,
+                      'اسم العامل': item.workerName,
+                      'نوع الإجراء': item.actionType === 'RESOLVE_AMBIGUOUS_PASS'
+                        ? 'اعتماد تصريح مؤقت'
+                        : item.actionType === 'RESOLVE_AMBIGUOUS_OUT'
+                        ? 'اعتماد انصراف نهائي'
+                        : item.actionType === 'OVERRIDE_OUT_TO_IN'
+                        ? 'تحويل انصراف إلى حضور'
+                        : item.actionType === 'MANUAL_EDIT'
+                        ? 'تعديل يدوي'
+                        : item.actionType === 'ADD_MANUAL_PUNCH'
+                        ? 'إضافة حركة يدوية'
+                        : 'حذف بصمة',
+                      'القيمة السابقة': item.oldValue,
+                      'القيمة الجديدة': item.newValue,
+                      'سبب ومبرر التعديل': item.reason,
+                    }));
+                    exportToExcel(exportData, 'سجل_التدقيق_HR', `سجل_تدقيق_تعديلات_HR_${new Date().toISOString().slice(0, 10)}`);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>تصدير سجل التدقيق إلى Excel</span>
+                </button>
+              )}
+            </div>
+
+            {/* Audit Log Table */}
+            <div className="flex-1 overflow-y-auto p-3">
+              {auditLog.length > 0 ? (
+                <div className="border border-slate-800 rounded-lg overflow-hidden">
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 text-[11px] border-b border-slate-800">
+                        <th className="py-2.5 px-3 font-semibold text-center w-10">م</th>
+                        <th className="py-2.5 px-3 font-semibold">تاريخ ووقت الإجراء</th>
+                        <th className="py-2.5 px-3 font-semibold">المسؤول (المنفذ)</th>
+                        <th className="py-2.5 px-3 font-semibold">العامل</th>
+                        <th className="py-2.5 px-3 font-semibold text-center">نوع الإجراء</th>
+                        <th className="py-2.5 px-3 font-semibold">القيمة السابقة</th>
+                        <th className="py-2.5 px-3 font-semibold">القيمة الجديدة</th>
+                        <th className="py-2.5 px-3 font-semibold">السبب والمبرر</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-sans">
+                      {auditLog
+                        .filter((item) => {
+                          if (!auditSearchQuery.trim()) return true;
+                          const q = auditSearchQuery.toLowerCase();
+                          return (
+                            item.workerName.toLowerCase().includes(q) ||
+                            String(item.workerCode).includes(q) ||
+                            item.reason.toLowerCase().includes(q) ||
+                            item.actionType.toLowerCase().includes(q)
+                          );
+                        })
+                        .map((entry, idx) => (
+                          <tr key={entry.id} className="hover:bg-slate-850/60 transition-colors">
+                            <td className="py-2 px-3 text-center text-slate-500 font-mono text-[11px]">
+                              {idx + 1}
+                            </td>
+                            <td className="py-2 px-3 text-slate-300 font-mono text-[11px]">
+                              {entry.displayDate} {entry.displayTime}
+                            </td>
+                            <td className="py-2 px-3 font-medium text-slate-200">
+                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px]">
+                                {entry.modifiedBy}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3">
+                              <span className="font-bold text-white block">{entry.workerName}</span>
+                              <span className="text-[10px] text-blue-400 font-mono">#{entry.workerCode}</span>
+                            </td>
+                            <td className="py-2 px-3 text-center">
+                              {entry.actionType === 'RESOLVE_AMBIGUOUS_PASS' ? (
+                                <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                                  تصريح مؤقت
+                                </span>
+                              ) : entry.actionType === 'RESOLVE_AMBIGUOUS_OUT' ? (
+                                <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-bold">
+                                  انصراف نهائي
+                                </span>
+                              ) : entry.actionType === 'OVERRIDE_OUT_TO_IN' ? (
+                                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                                  تحويل لحضور
+                                </span>
+                              ) : entry.actionType === 'ADD_MANUAL_PUNCH' ? (
+                                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                                  إضافة يدوية
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px] font-bold">
+                                  تعديل حركة
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 text-slate-400 text-[11px]">
+                              {entry.oldValue}
+                            </td>
+                            <td className="py-2 px-3 font-medium text-emerald-300 text-[11px]">
+                              {entry.newValue}
+                            </td>
+                            <td className="py-2 px-3 text-slate-300 text-[11px]">
+                              {entry.reason}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="p-10 text-center text-xs text-slate-400 space-y-1">
+                  <ShieldCheck className="w-8 h-8 mx-auto text-slate-600 mb-2" />
+                  <p className="font-bold text-slate-300">لا توجد تعديلات يدوية مسجلة في سجل التدقيق حتى الآن.</p>
+                  <p className="text-[11px] text-slate-500">
+                    أي تعديل يقوم به مسؤول HR على البصمات الغامضة أو تصحيح الحركات سيظهر هنا تلقائياً بتوثيق كامل.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 bg-slate-950/80 border-t border-slate-800 flex justify-end">
+              <button
+                onClick={() => setShowAuditModal(false)}
+                className="px-4 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium cursor-pointer"
+              >
+                إغلاق
               </button>
             </div>
           </div>

@@ -12,7 +12,6 @@ import { AttendanceLogs } from './components/AttendanceLogs';
 import { WorkersManager } from './components/WorkersManager';
 import { GatePassManager } from './components/GatePassManager';
 import { ReportsCenter } from './components/ReportsCenter';
-import { LiveMonitor } from './components/LiveMonitor';
 import { SettingsManager } from './components/SettingsManager';
 
 import { 
@@ -23,15 +22,12 @@ import {
   INITIAL_GATE_PASSES,
   DEFAULT_FACTORY_SETTINGS
 } from './data/mockData';
-import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings } from './types';
+import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings, HRAuditRecord } from './types';
 import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './services/deviceConnection';
 import { resolveSmartPunchState } from './utils/attendanceEngine';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
-  
-  // Workstation session start timestamp for volatile live feed (Point 2)
-  const sessionStartTimeRef = useRef<number>(Date.now());
 
   // Persist devices with localStorage so custom IPs and ports are remembered
   const [devices, setDevices] = useState<Device[]>(() => {
@@ -85,12 +81,19 @@ export default function App() {
     }
     return DEFAULT_FACTORY_SETTINGS;
   });
+
+  const [auditLog, setAuditLog] = useState<HRAuditRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('zkt_audit_log_v5');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error('Error loading audit log', e);
+    }
+    return [];
+  });
   
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [globalNotice, setGlobalNotice] = useState<string | null>(null);
-
-  // Transient session-only live punches (never persisted to localStorage, resets on reload)
-  const [liveSessionRecords, setLiveSessionRecords] = useState<AttendanceRecord[]>([]);
 
   // Debounced auto-save to localStorage to prevent UI freezing during navigation and heavy operations (Point 1)
   useEffect(() => {
@@ -147,6 +150,21 @@ export default function App() {
     }, 400);
     return () => clearTimeout(timer);
   }, [settings]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_audit_log_v5', JSON.stringify(auditLog));
+      } catch (e) {
+        console.error('Error saving audit log', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [auditLog]);
+
+  const handleAddAuditRecord = (record: HRAuditRecord) => {
+    setAuditLog((prev) => [record, ...prev]);
+  };
 
   const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([
     { 
@@ -399,16 +417,6 @@ export default function App() {
 
     if (allNewRecords.length > 0) {
       setAttendanceRecords((prev) => [...allNewRecords, ...prev]);
-
-      // Volatile Live Feed: only display punches with timestamp >= workstation session start (Point 2)
-      const sessionCutoff = sessionStartTimeRef.current - (2 * 60 * 1000);
-      const sessionPunches = allNewRecords.filter((p) => {
-        const pTime = new Date(p.timestamp).getTime();
-        return isNaN(pTime) || pTime >= sessionCutoff;
-      });
-      if (sessionPunches.length > 0) {
-        setLiveSessionRecords((prev) => [...sessionPunches, ...prev].slice(0, 500));
-      }
     }
 
     setIsSyncing(false);
@@ -513,16 +521,6 @@ export default function App() {
 
       if (newRecords.length > 0) {
         setAttendanceRecords((prev) => [...newRecords, ...prev]);
-
-        // Volatile Live Feed: only display punches with timestamp >= workstation session start (Point 2)
-        const sessionCutoff = sessionStartTimeRef.current - (2 * 60 * 1000);
-        const sessionPunches = newRecords.filter((p) => {
-          const pTime = new Date(p.timestamp).getTime();
-          return isNaN(pTime) || pTime >= sessionCutoff;
-        });
-        if (sessionPunches.length > 0) {
-          setLiveSessionRecords((prev) => [...sessionPunches, ...prev].slice(0, 500));
-        }
       }
 
       const totalRecordCount = res.deviceInfo?.logCounts ?? res.records.length;
@@ -601,7 +599,6 @@ export default function App() {
   const handleDeleteWorker = (workerCode: number) => {
     setWorkers((prev) => prev.filter((w) => w.code !== workerCode));
     setAttendanceRecords((prev) => prev.filter((r) => r.workerCode !== workerCode));
-    setLiveSessionRecords((prev) => prev.filter((r) => r.workerCode !== workerCode));
     showNotification(`🗑️ تم مسح بيانات وسجلات العامل (كود #${workerCode}) محلياً من البرنامج بنجاح.`);
   };
 
@@ -646,19 +643,6 @@ export default function App() {
 
     // 2. Re-point all punches from aliasCode to primaryCode
     setAttendanceRecords((prev) =>
-      prev.map((r) =>
-        r.workerCode === aliasCode
-          ? {
-              ...r,
-              workerCode: primaryCode,
-              workerName: primaryWorker.name,
-              department: primaryWorker.department,
-            }
-          : r
-      )
-    );
-
-    setLiveSessionRecords((prev) =>
       prev.map((r) =>
         r.workerCode === aliasCode
           ? {
@@ -779,7 +763,6 @@ export default function App() {
   // 12. Live Punch Received Handler
   const handleNewLiveRecord = (record: AttendanceRecord) => {
     setAttendanceRecords((prev) => [record, ...prev]);
-    setLiveSessionRecords((prev) => [record, ...prev]);
   };
 
   // 13. Settings & Backup Handlers (Point 8: Sync Settings to Shift Engine)
@@ -898,16 +881,7 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'live-stream' && (
-              <LiveMonitor
-                devices={devices}
-                workers={workers}
-                liveSessionRecords={liveSessionRecords}
-                onClearLiveSession={() => setLiveSessionRecords([])}
-                onSyncAll={handleSyncAllDevices}
-                isSyncing={isSyncing}
-              />
-            )}
+
 
             {activeTab === 'devices' && (
               <DeviceManager
@@ -1009,9 +983,12 @@ export default function App() {
                 devices={devices}
                 shiftEndTime={settings.standardShiftEnd}
                 settings={settings}
+                auditLog={auditLog}
                 onAddManualRecord={handleAddManualRecord}
                 onUpdateRecord={handleUpdateRecord}
                 onDeleteRecord={handleDeleteRecord}
+                onAddAuditRecord={handleAddAuditRecord}
+                onAddGatePass={handleAddGatePass}
               />
             )}
 
@@ -1044,6 +1021,7 @@ export default function App() {
                 shifts={shifts}
                 gatePasses={gatePasses}
                 devices={devices}
+                factoryName={settings.factoryName}
                 onSyncDevices={handleSyncAllDevices}
                 isSyncing={isSyncing}
               />

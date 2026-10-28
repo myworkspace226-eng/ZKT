@@ -72,6 +72,11 @@ export interface AttendanceRecord {
   lateMinutes?: number;
   isMissedPunch?: boolean;
   isAmbiguousSinglePunch?: boolean;
+  ambiguousResolution?: 'pending' | 'temporary_pass' | 'final_out';
+  linkedPermissionId?: string;
+  expectedReturnTime?: string;
+  isReturnFromPass?: boolean;
+  missingInPunch?: boolean;
   missedPunchType?: 'IN' | 'OUT' | 'AMBIGUOUS';
   missedPunchReason?: string;
   isEarlyDeparture?: boolean;
@@ -141,10 +146,33 @@ export interface FactorySettings {
   overnightCutoffHour: number; // 6 (06:00 AM)
   autoAbsenceCutoffTime: string; // e.g. "08:30"
   autoSyncIntervalMinutes: number;
+  overtimeGraceMinutes?: number; // e.g. 30 (grace threshold before calculating overtime from shift end)
+  morningWindowStart?: string; // "06:00"
+  morningWindowEnd?: string; // "11:59"
+  ambiguousWindowStart?: string; // "12:00"
+  ambiguousWindowEnd?: string; // "15:59"
+  afternoonWindowStart?: string; // "16:00"
   fridayMultiplier?: number;
   regularOvertimeMultiplier?: number;
   nightOvertimeMultiplier?: number;
   defaultHourlyRate?: number;
+}
+
+export interface HRAuditRecord {
+  id: string;
+  timestamp: string; // ISO
+  displayTime: string;
+  displayDate: string;
+  modifiedBy: string; // e.g. "مسؤول الموارد البشرية"
+  workerCode: number;
+  workerName: string;
+  recordId?: string;
+  recordDate: string;
+  recordTime: string;
+  actionType: 'OVERRIDE_OUT_TO_IN' | 'RESOLVE_AMBIGUOUS_PASS' | 'RESOLVE_AMBIGUOUS_OUT' | 'MANUAL_EDIT' | 'ADD_MANUAL_PUNCH' | 'DELETE_PUNCH';
+  oldValue: string;
+  newValue: string;
+  reason: string;
 }
 
 export interface ProductionLineStatus {

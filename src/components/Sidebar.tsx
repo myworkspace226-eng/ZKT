@@ -1,7 +1,6 @@
 import React from 'react';
 import { 
   LayoutDashboard, 
-  Radio, 
   HardDrive, 
   Fingerprint, 
   Users, 
@@ -15,7 +14,6 @@ import {
 
 export type ActiveTab = 
   | 'dashboard' 
-  | 'live-stream'
   | 'devices' 
   | 'logs' 
   | 'workers' 
@@ -55,13 +53,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'dashboard' as ActiveTab,
       label: 'لوحة العمليات',
       icon: LayoutDashboard,
-    },
-    {
-      id: 'live-stream' as ActiveTab,
-      label: 'البصمات الحية (مباشر)',
-      icon: Radio,
-      badge: 'Live',
-      badgeColor: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
     },
     {
       id: 'devices' as ActiveTab,
@@ -123,11 +114,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
               {item.badge && (
                 <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                  item.badgeColor 
-                    ? item.badgeColor 
-                    : isActive 
-                      ? 'bg-blue-700 text-white' 
-                      : 'bg-slate-800 text-slate-400'
+                  isActive 
+                    ? 'bg-blue-700 text-white' 
+                    : 'bg-slate-800 text-slate-400'
                 }`}>
                   {item.badge}
                 </span>

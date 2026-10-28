@@ -141,4 +141,10 @@ export const DEFAULT_FACTORY_SETTINGS: FactorySettings = {
   overnightCutoffHour: 6,
   autoAbsenceCutoffTime: '08:30',
   autoSyncIntervalMinutes: 5,
+  overtimeGraceMinutes: 30,
+  morningWindowStart: '06:00',
+  morningWindowEnd: '11:59',
+  ambiguousWindowStart: '12:00',
+  ambiguousWindowEnd: '15:59',
+  afternoonWindowStart: '16:00',
 };

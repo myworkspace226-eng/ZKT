@@ -204,9 +204,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </div>
 
           {/* Policies & Windows */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs pt-1">
             <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
-              <label className="text-slate-300 font-medium block">فترة السماح للتأخير</label>
+              <label className="text-slate-300 font-medium block">سماح التأخير (صباحاً)</label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
@@ -219,6 +219,22 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 <span className="text-slate-400 text-[11px] shrink-0">دقيقة</span>
               </div>
               <span className="text-[10px] text-slate-500 block">بعدها يُحتسب التأخير</span>
+            </div>
+
+            <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
+              <label className="text-slate-300 font-medium block">سماح الإضافي (مساءً)</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  value={formData.overtimeGraceMinutes ?? 30}
+                  onChange={(e) => setFormData({ ...formData, overtimeGraceMinutes: parseInt(e.target.value, 10) || 0 })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-white font-mono text-center focus:border-blue-500"
+                />
+                <span className="text-slate-400 text-[11px] shrink-0">دقيقة</span>
+              </div>
+              <span className="text-[10px] text-slate-500 block">إذا تجاوزها يحسب الإضافي من نهاية الوردية</span>
             </div>
 
             <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
@@ -250,11 +266,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 />
                 <span className="text-slate-400 text-[11px] shrink-0">دقيقة</span>
               </div>
-              <span className="text-[10px] text-slate-500 block">تجاهل تكرار البصمات خلال هذه المدة</span>
+              <span className="text-[10px] text-slate-500 block">تجاهل تكرار البصمات (افتراضي 60د)</span>
             </div>
 
             <div className="space-y-1 bg-slate-950/50 p-2.5 rounded border border-slate-800">
-              <label className="text-slate-300 font-medium block">حد الورديات الليلية</label>
+              <label className="text-slate-300 font-medium block">حد بداية اليوم الفعلي</label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
@@ -266,7 +282,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 />
                 <span className="text-slate-400 text-[11px] shrink-0">صباحاً</span>
               </div>
-              <span className="text-[10px] text-slate-500 block">بصمات ما قبلها تُضم لليوم السابق</span>
+              <span className="text-[10px] text-slate-500 block">06:00 ص بداية نافذة الحضور</span>
             </div>
           </div>
         </div>

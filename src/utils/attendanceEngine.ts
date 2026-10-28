@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { AttendanceRecord, ShiftRule, Worker } from '../types';
 
 /**
@@ -25,31 +26,36 @@ export function resolveSmartPunchState(
 
   const decimalHour = hours + minutes / 60;
 
-  // Check-In window: 06:00 AM to 11:30 AM
-  if (decimalHour >= 6.0 && decimalHour <= 11.5) {
+  // Morning Check-In window: 06:00 AM to 11:59 AM (Rule 1)
+  if (decimalHour >= 6.0 && decimalHour < 12.0) {
     if (rawState === 'OUT') {
       return {
         resolvedState: 'IN',
         autoCorrected: true,
-        reason: 'تم التصحيح تلقائياً: البصمة في نافذة الصباح (بداية العمل)',
+        reason: 'تم التصحيح تلقائياً: البصمة في نافذة الحضور الصباحية (06:00 - 11:59)',
       };
     }
-    return { resolvedState: 'IN', autoCorrected: false, reason: 'حضور طبيعي' };
+    return { resolvedState: 'IN', autoCorrected: false, reason: 'حضور طبيعي (نافذة الصباح)' };
   }
 
-  // Afternoon & Evening Check-Out window: 13:00 to 23:59 or early morning overnight
-  if (decimalHour >= 14.0 || decimalHour <= 6.5) {
+  // Afternoon Check-Out window: 16:00 to 23:59 or early morning overnight (Rule 5)
+  if (decimalHour >= 16.0 || decimalHour < 6.0) {
     if (rawState === 'IN') {
       return {
         resolvedState: 'OUT',
         autoCorrected: true,
-        reason: 'تم التصحيح تلقائياً: البصمة في نافذة الانصراف/نهاية الوردية',
+        reason: 'تم التصحيح تلقائياً: البصمة في نافذة الانصراف (16:00 فما بعد)',
       };
     }
     return { resolvedState: 'OUT', autoCorrected: false, reason: 'انصراف طبيعي' };
   }
 
-  return { resolvedState: rawState, autoCorrected: false, reason: 'مطابق لحالة الماكينة' };
+  // Ambiguous Mid-shift window: 12:00 to 15:59 (Rule 4)
+  return { 
+    resolvedState: rawState, 
+    autoCorrected: false, 
+    reason: 'نافذة الغموض والتصاريح (12:00 - 15:59) - بانتظار تحديد HR' 
+  };
 }
 
 /**
@@ -65,8 +71,9 @@ export interface SmartAttendanceOptions {
   shiftStartTime?: string; // e.g. "08:00"
   bangladeshiShiftEnd?: string; // e.g. "18:30"
   bangladeshiShiftStart?: string; // e.g. "08:00"
-  earlyDepartureWindowMinutes?: number; // e.g. 30 (16:00 - 16:30)
+  earlyDepartureWindowMinutes?: number; // e.g. 30
   duplicateWindowMinutes?: number; // default 60 min
+  overtimeGraceMinutes?: number; // default 30 min
   overnightCutoffHour?: number; // e.g. 6 (06:00 AM)
   workers?: Worker[];
   workerMap?: Map<number, Worker>;
@@ -74,16 +81,14 @@ export interface SmartAttendanceOptions {
 }
 
 /**
- * Smart Attendance Processing Engine (خوارزمية معالجة البصمات الذكية الاحترافية - V 4.0.0)
- * 1. Cooldown Deduplication: Ignore any punch occurring within < duplicateWindowMinutes (default 60 min) of previous accepted punch.
- * 2. Overnight Shifts Attachment: Punches between 00:00 and overnightCutoffHour (06:00 AM) attach to previous day as OUT.
- * 3. First & Last Punch: 1st punch = IN, last punch = OUT, intermediate punches = ignored.
- * 4. Shift Reactivity: Reads shiftEndTime & bangladeshiShiftEnd dynamically from settings.
- * 5. Ambiguous Single Punch (حالات البصمة الواحدة الغامضة):
- *    - Morning (< 11:00 AM) -> IN.
- *    - End of shift (>= shiftEnd - 45 min) -> OUT (missed IN).
- *    - Mid-shift (11:00 AM to shiftEnd - 45 min) -> isAmbiguousSinglePunch = true (HR manual resolution required).
- * 6. HR Override Protection: isHROverride / isManual records are preserved exactly as set by HR.
+ * Smart Attendance Processing Engine (محرك الحضور والانصراف الاحترافي - V 5.0)
+ * 1. Morning Check-in Window (06:00 - 11:59): First punch of the day is IN.
+ * 2. Duplicate Rule: Configurable cooldown (default 60 min). Punches within window are ignored, EXCEPT returns from permissions.
+ * 3. Early OUT Rule: Second punch after morning check-in (exceeding duplicate window) is considered OUT.
+ * 4. Ambiguous Window (12:00 - 15:59): PENDING_DECISION unless resolved as temporary_pass or final_out.
+ * 5. Post-12 PM Rule (16:00 onwards): Default is OUT. If no morning IN exists -> missingInPunch = true (Red Alert).
+ * 6. Overtime Logic: 30-min grace after shift end (16:30 Egyptians, 18:30 Bengalis). If exceeded, counted from shift end!
+ * 7. HR Override & Audit: Manual edits/overrides are strictly respected and protected.
  */
 export function processSmartAttendanceLogs(
   records: AttendanceRecord[],
@@ -102,10 +107,10 @@ export function processSmartAttendanceLogs(
 
   const defaultShiftEndStr = options?.shiftEndTime || '16:30';
   const bangladeshiShiftEndStr = options?.bangladeshiShiftEnd || '18:30';
-  const earlyWindowMin = options?.earlyDepartureWindowMinutes ?? 30;
   const overnightCutoff = options?.overnightCutoffHour ?? 6;
   const duplicateWindowMinutes = options?.duplicateWindowMinutes ?? 60;
   const duplicateWindowMs = duplicateWindowMinutes * 60 * 1000;
+  const overtimeGraceMinutes = options?.overtimeGraceMinutes ?? 30;
 
   // Build lookup map for workers if provided
   const workerLookup = options?.workerMap || (options?.workers ? new Map(options.workers.map((w) => [w.code, w])) : null);
@@ -131,7 +136,6 @@ export function processSmartAttendanceLogs(
 
     const [endH, endM] = effectiveShiftEndStr.split(':').map((v) => parseInt(v, 10) || 0);
     const shiftEndTotalMinutes = endH * 60 + endM;
-    const earlyStartMinutes = shiftEndTotalMinutes - earlyWindowMin;
 
     // 1. Sort all punches for this worker chronologically
     workerRecords.sort((a, b) => {
@@ -141,55 +145,19 @@ export function processSmartAttendanceLogs(
       return tA - tB;
     });
 
-    // 2. Deduplication using dynamic duplicate window cooldown
-    const validPunches: AttendanceRecord[] = [];
-    let lastAcceptedTime: number | null = null;
-
-    for (const rec of workerRecords) {
-      // HR Override is always authoritative and protected
-      if (rec.isHROverride || (rec.isManual && rec.resolvedState)) {
-        rec.isDuplicateIgnored = false;
-        validPunches.push(rec);
-        const t = new Date(`${rec.displayDate}T${rec.displayTime}:00`).getTime();
-        if (!isNaN(t)) lastAcceptedTime = t;
-        continue;
-      }
-
-      const punchTime = new Date(`${rec.displayDate}T${rec.displayTime}:00`).getTime();
-      if (isNaN(punchTime)) {
-        validPunches.push(rec);
-        continue;
-      }
-
-      // If less than duplicateWindowMinutes from last accepted punch -> ignore as duplicate
-      if (lastAcceptedTime !== null && (punchTime - lastAcceptedTime) < duplicateWindowMs) {
-        rec.isDuplicateIgnored = true;
-        rec.duplicateReason = `تكرار بصمة (أقل من ${duplicateWindowMinutes} دقيقة)`;
-        processedAll.push(rec);
-      } else {
-        rec.isDuplicateIgnored = false;
-        validPunches.push(rec);
-        lastAcceptedTime = punchTime;
-      }
-    }
-
-    // 3. Work Day Assignment (Handling Overnight Shifts & Late Night Punches)
+    // 2. Work Day Assignment (06:00 cutoff: punches between 00:00 and 05:59 belong to previous work day)
     const dayPunchesMap = new Map<string, AttendanceRecord[]>();
 
-    for (const rec of validPunches) {
+    for (const rec of workerRecords) {
       const [hStr] = (rec.displayTime || '08:00').split(':');
       const hours = parseInt(hStr, 10) || 0;
       let targetWorkDay = rec.displayDate;
 
-      // Check if late night punch (before overnight cutoff e.g. 06:00 AM)
+      // Punches between 00:00 and 05:59 belong to previous work day shift
       if (hours < overnightCutoff) {
-        // Calculate previous calendar date YYYY-MM-DD
         const curDate = new Date(`${rec.displayDate}T12:00:00`);
         curDate.setDate(curDate.getDate() - 1);
-        const prevDayStr = curDate.toISOString().slice(0, 10);
-
-        // Any punch between 00:00 and overnightCutoff belongs to the night shift of previous day
-        targetWorkDay = prevDayStr;
+        targetWorkDay = curDate.toISOString().slice(0, 10);
       }
 
       let dList = dayPunchesMap.get(targetWorkDay);
@@ -200,27 +168,7 @@ export function processSmartAttendanceLogs(
       dList.push(rec);
     }
 
-    // Helper to evaluate Early Departure for a check-out punch
-    const applyEarlyDepartureCheck = (punch: AttendanceRecord) => {
-      if (punch.isHROverride) return;
-      const [pHStr, pMStr] = (punch.displayTime || '16:00').split(':');
-      const pH = parseInt(pHStr, 10) || 0;
-      const pM = parseInt(pMStr, 10) || 0;
-      const punchMinutes = pH * 60 + pM;
-
-      if (punchMinutes >= earlyStartMinutes && punchMinutes < shiftEndTotalMinutes) {
-        const diff = shiftEndTotalMinutes - punchMinutes;
-        punch.isEarlyDeparture = true;
-        punch.earlyDepartureMinutes = diff;
-        punch.earlyDepartureReason = `انصراف مبكر (-${diff} د) قبل موعد نهاية الوردية (${effectiveShiftEndStr})`;
-      } else {
-        punch.isEarlyDeparture = false;
-        punch.earlyDepartureMinutes = 0;
-        punch.earlyDepartureReason = undefined;
-      }
-    };
-
-    // 4. First and Last Punch Rule per Work Day & Missed Punch Detection
+    // 3. Process each work day independently
     dayPunchesMap.forEach((punchesOnDay, workDay) => {
       punchesOnDay.sort((a, b) => {
         const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
@@ -228,113 +176,224 @@ export function processSmartAttendanceLogs(
         return tA - tB;
       });
 
+      // Deduplication using Cooldown with Permission Return Exception (Point 2 & Point 4)
+      const acceptedPunches: AttendanceRecord[] = [];
+      let lastAcceptedTime: number | null = null;
+      let lastAcceptedWasPassExit = false;
+
+      for (const rec of punchesOnDay) {
+        // HR Override is always authoritative and protected (Point 7)
+        if (rec.isHROverride || (rec.isManual && rec.resolvedState)) {
+          rec.isDuplicateIgnored = false;
+          acceptedPunches.push(rec);
+          const t = new Date(`${rec.displayDate}T${rec.displayTime}:00`).getTime();
+          if (!isNaN(t)) lastAcceptedTime = t;
+          lastAcceptedWasPassExit = rec.ambiguousResolution === 'temporary_pass';
+          continue;
+        }
+
+        const punchTime = new Date(`${rec.displayDate}T${rec.displayTime}:00`).getTime();
+        if (isNaN(punchTime)) {
+          acceptedPunches.push(rec);
+          continue;
+        }
+
+        // Exception: Return from temporary permission pass bypasses duplicate cooldown (Point 4)
+        const isReturnFromPass = rec.isReturnFromPass || Boolean(rec.linkedPermissionId) || lastAcceptedWasPassExit;
+
+        if (lastAcceptedTime !== null && (punchTime - lastAcceptedTime) < duplicateWindowMs && !isReturnFromPass) {
+          rec.isDuplicateIgnored = true;
+          rec.duplicateReason = `تكرار بصمة (أقل من ${duplicateWindowMinutes} دقيقة)`;
+          processedAll.push(rec);
+        } else {
+          rec.isDuplicateIgnored = false;
+          acceptedPunches.push(rec);
+          lastAcceptedTime = punchTime;
+          lastAcceptedWasPassExit = rec.ambiguousResolution === 'temporary_pass';
+        }
+      }
+
       const isToday = workDay === todayStr;
       const isPastShiftEnd = isToday ? nowTotalMinutes >= shiftEndTotalMinutes : true;
 
-      if (punchesOnDay.length === 1) {
-        const singlePunch = punchesOnDay[0];
+      // Helper for Overtime on departure punches (Point 6: Factory Logic)
+      const evaluateOvertime = (punch: AttendanceRecord, punchMinutes: number) => {
+        if (punch.isHROverride && punch.overtimeHours !== undefined) {
+          punch.isOvertime = punch.overtimeHours > 0;
+          return;
+        }
+        // If departure is past shiftEnd + overtimeGraceMinutes (e.g. 30 mins)
+        const minutesPastEnd = punchMinutes - shiftEndTotalMinutes;
+        if (minutesPastEnd > overtimeGraceMinutes) {
+          // Counter starts from shiftEnd itself!
+          const otHours = Number((minutesPastEnd / 60).toFixed(2));
+          punch.isOvertime = true;
+          punch.overtimeHours = otHours;
+        } else {
+          punch.isOvertime = false;
+          punch.overtimeHours = 0;
+        }
+      };
 
-        if (singlePunch.isHROverride) {
-          singlePunch.isAmbiguousSinglePunch = false;
-          if (singlePunch.resolvedState === 'IN') {
+      // Helper for Early Departure on OUT punches
+      const evaluateEarlyDeparture = (punch: AttendanceRecord, punchMinutes: number) => {
+        if (punch.isHROverride) return;
+        if (punchMinutes < shiftEndTotalMinutes) {
+          const diff = shiftEndTotalMinutes - punchMinutes;
+          punch.isEarlyDeparture = true;
+          punch.earlyDepartureMinutes = diff;
+          punch.earlyDepartureReason = `انصراف مبكر (-${diff} د) قبل موعد نهاية الوردية (${effectiveShiftEndStr})`;
+        } else {
+          punch.isEarlyDeparture = false;
+          punch.earlyDepartureMinutes = 0;
+          punch.earlyDepartureReason = undefined;
+        }
+      };
+
+      // Classification based on V5.0 Windows
+      if (acceptedPunches.length === 0) return;
+
+      if (acceptedPunches.length === 1) {
+        const p = acceptedPunches[0];
+        const [pHStr, pMStr] = (p.displayTime || '08:00').split(':');
+        const pH = parseInt(pHStr, 10) || 8;
+        const pM = parseInt(pMStr, 10) || 0;
+        const pMinutes = pH * 60 + pM;
+
+        if (p.isHROverride) {
+          p.isAmbiguousSinglePunch = false;
+          if (p.resolvedState === 'IN') {
+            p.missingInPunch = false;
             if (isPastShiftEnd) {
-              singlePunch.isMissedPunch = true;
-              singlePunch.missedPunchType = 'OUT';
-              singlePunch.missedPunchReason = 'بصمة انصراف مفقودة (تم تسجيل الحضور يدوياً)';
-            } else {
-              singlePunch.isMissedPunch = false;
+              p.isMissedPunch = true;
+              p.missedPunchType = 'OUT';
+              p.missedPunchReason = 'بصمة انصراف مفقودة (تم تسجيل الحضور يدوياً)';
             }
           } else {
-            singlePunch.isMissedPunch = true;
-            singlePunch.missedPunchType = 'IN';
-            singlePunch.missedPunchReason = 'بصمة حضور مفقودة (تم تسجيل الانصراف يدوياً)';
-            applyEarlyDepartureCheck(singlePunch);
+            evaluateEarlyDeparture(p, pMinutes);
+            evaluateOvertime(p, pMinutes);
           }
-          processedAll.push(singlePunch);
+          processedAll.push(p);
           return;
         }
 
-        const [pHStr, pMStr] = (singlePunch.displayTime || '08:00').split(':');
-        const pH = parseInt(pHStr, 10) || 8;
-        const pM = parseInt(pMStr, 10) || 0;
-        const punchMinutes = pH * 60 + pM;
-
-        // Zone 1: Morning Check-in Window (Punch before 11:00 AM)
-        if (punchMinutes < 11 * 60) {
-          singlePunch.resolvedState = 'IN';
-          singlePunch.isAmbiguousSinglePunch = false;
+        // Rule 1: Morning Check-in Window (06:00 to 11:59 -> 360 to 719 minutes)
+        if (pMinutes >= 360 && pMinutes < 720) {
+          p.resolvedState = 'IN';
+          p.isAmbiguousSinglePunch = false;
+          p.missingInPunch = false;
           if (isPastShiftEnd) {
-            singlePunch.isMissedPunch = true;
-            singlePunch.missedPunchType = 'OUT';
-            singlePunch.missedPunchReason = 'بصمة انصراف مفقودة (لم يسجل خروج)';
+            p.isMissedPunch = true;
+            p.missedPunchType = 'OUT';
+            p.missedPunchReason = 'بصمة انصراف مفقودة (لم يسجل خروج)';
           } else {
-            singlePunch.isMissedPunch = false;
-            singlePunch.missedPunchReason = undefined;
+            p.isMissedPunch = false;
+            p.missedPunchReason = undefined;
           }
-          singlePunch.isEarlyDeparture = false;
-        } 
-        // Zone 2: Shift-End Window (within 45 minutes of shift end or later, e.g. >= 15:45 for Egyptian, >= 17:45 for Bengali)
-        else if (punchMinutes >= (shiftEndTotalMinutes - 45)) {
-          singlePunch.resolvedState = 'OUT';
-          singlePunch.isAmbiguousSinglePunch = false;
-          singlePunch.isMissedPunch = true;
-          singlePunch.missedPunchType = 'IN';
-          singlePunch.missedPunchReason = 'بصمة حضور مفقودة (لم يسجل دخول في الصباح)';
-          applyEarlyDepartureCheck(singlePunch);
-        } 
-        // Zone 3: Mid-Shift Ambiguous Punch (11:00 AM to shiftEnd - 45 min)
+          p.isEarlyDeparture = false;
+        }
+        // Rule 4: Ambiguous Window (12:00 to 15:59 -> 720 to 959 minutes)
+        else if (pMinutes >= 720 && pMinutes < 960) {
+          if (p.ambiguousResolution === 'temporary_pass') {
+            p.resolvedState = 'OUT';
+            p.isAmbiguousSinglePunch = false;
+            p.missingInPunch = false;
+            p.manualNote = p.manualNote || `تصريح مؤقت (عودة متوقعة: ${p.expectedReturnTime || '-'})`;
+          } else if (p.ambiguousResolution === 'final_out') {
+            p.resolvedState = 'OUT';
+            p.isAmbiguousSinglePunch = false;
+            p.missingInPunch = false;
+            evaluateEarlyDeparture(p, pMinutes);
+          } else {
+            // Unresolved: Popup required for HR decision
+            p.isAmbiguousSinglePunch = true;
+            p.ambiguousResolution = 'pending';
+            p.isMissedPunch = true;
+            p.missedPunchType = 'AMBIGUOUS';
+            p.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت أم انصراف نهائي؟)';
+          }
+        }
+        // Rule 5: Post-12 PM / Afternoon Window (16:00 onwards -> >= 960 minutes or early morning < 360)
         else {
-          // Do NOT guess! Tag as ambiguous single punch requiring HR decision
-          singlePunch.resolvedState = singlePunch.rawState || 'IN';
-          singlePunch.isAmbiguousSinglePunch = true;
-          singlePunch.isMissedPunch = true;
-          singlePunch.missedPunchType = 'AMBIGUOUS';
-          singlePunch.missedPunchReason = 'بصمة واحدة في منتصف الوردية (تحتاج قرار HR: حضور متأخر أم انصراف مبكر؟)';
-          singlePunch.isEarlyDeparture = false;
+          p.resolvedState = 'OUT';
+          p.isAmbiguousSinglePunch = false;
+          // Warning: No morning IN punch exists on this work day -> Flag Missing IN (Point 5)
+          p.missingInPunch = true;
+          p.isMissedPunch = true;
+          p.missedPunchType = 'IN';
+          p.missedPunchReason = 'بصمة حضور ناقصة (Missing IN)';
+          evaluateEarlyDeparture(p, pMinutes);
+          evaluateOvertime(p, pMinutes);
         }
 
-        processedAll.push(singlePunch);
+        processedAll.push(p);
 
       } else {
-        // 2 or more punches: First is IN, Last is OUT
-        const firstPunch = punchesOnDay[0];
-        if (!firstPunch.isHROverride) {
-          firstPunch.resolvedState = 'IN';
-        }
-        firstPunch.isDuplicateIgnored = false;
-        firstPunch.isMissedPunch = false;
-        firstPunch.isAmbiguousSinglePunch = false;
-        firstPunch.missedPunchReason = undefined;
-        firstPunch.isEarlyDeparture = false;
-        processedAll.push(firstPunch);
+        // 2 or more accepted punches on this work day
+        const first = acceptedPunches[0];
+        const [fHStr, fMStr] = (first.displayTime || '08:00').split(':');
+        const fMinutes = (parseInt(fHStr, 10) || 8) * 60 + (parseInt(fMStr, 10) || 0);
 
-        const lastPunch = punchesOnDay[punchesOnDay.length - 1];
-        if (!lastPunch.isHROverride) {
-          lastPunch.resolvedState = 'OUT';
-        }
-        lastPunch.isDuplicateIgnored = false;
-        lastPunch.isMissedPunch = false;
-        lastPunch.isAmbiguousSinglePunch = false;
-        lastPunch.missedPunchReason = undefined;
-        // Check early departure for the OUT punch
-        applyEarlyDepartureCheck(lastPunch);
-        processedAll.push(lastPunch);
-
-        // Any intermediate punches are ignored as intermediate
-        for (let i = 1; i < punchesOnDay.length - 1; i++) {
-          const midPunch = punchesOnDay[i];
-          if (!midPunch.isHROverride) {
-            midPunch.isDuplicateIgnored = true;
-            midPunch.duplicateReason = 'بصمة بينية (تم اعتماد الأولى كحضور والأخيرة كانصراف)';
+        // Check if first punch was morning check-in (Rule 1)
+        if (!first.isHROverride) {
+          if (fMinutes >= 360 && fMinutes < 720) {
+            first.resolvedState = 'IN';
+            first.missingInPunch = false;
+          } else if (fMinutes >= 720 && fMinutes < 960) {
+            first.resolvedState = first.ambiguousResolution === 'final_out' ? 'OUT' : 'IN';
+          } else {
+            first.resolvedState = 'OUT';
+            first.missingInPunch = true;
+            first.missedPunchReason = 'بصمة حضور ناقصة (Missing IN)';
           }
-          midPunch.isAmbiguousSinglePunch = false;
-          processedAll.push(midPunch);
+        }
+        first.isDuplicateIgnored = false;
+        first.isAmbiguousSinglePunch = false;
+        first.isMissedPunch = false;
+        processedAll.push(first);
+
+        const last = acceptedPunches[acceptedPunches.length - 1];
+        const [lHStr, lMStr] = (last.displayTime || '16:30').split(':');
+        const lMinutes = (parseInt(lHStr, 10) || 16) * 60 + (parseInt(lMStr, 10) || 30);
+
+        // Rule 3 (Early OUT): If second punch is after morning check-in and before shift end
+        if (!last.isHROverride) {
+          last.resolvedState = 'OUT';
+          evaluateEarlyDeparture(last, lMinutes);
+          evaluateOvertime(last, lMinutes);
+        }
+        last.isDuplicateIgnored = false;
+        last.isAmbiguousSinglePunch = false;
+        last.isMissedPunch = false;
+        processedAll.push(last);
+
+        // Intermediate punches (Punches between first and last)
+        for (let i = 1; i < acceptedPunches.length - 1; i++) {
+          const mid = acceptedPunches[i];
+
+          // If intermediate punch was a temporary pass or return from pass (Point 4)
+          if (mid.ambiguousResolution === 'temporary_pass') {
+            mid.resolvedState = 'OUT';
+            mid.isDuplicateIgnored = false;
+            mid.isAmbiguousSinglePunch = false;
+          } else if (mid.isReturnFromPass) {
+            mid.resolvedState = 'IN';
+            mid.isDuplicateIgnored = false;
+            mid.isAmbiguousSinglePunch = false;
+          } else if (mid.isHROverride) {
+            mid.isDuplicateIgnored = false;
+          } else {
+            // General intermediate punch
+            mid.isDuplicateIgnored = true;
+            mid.duplicateReason = 'بصمة بينية (تم اعتماد الأولى كحضور والأخيرة كانصراف)';
+          }
+          processedAll.push(mid);
         }
       }
     });
   });
 
-  // Sort overall descending by timestamp for display
+  // Sort overall descending by date/time
   processedAll.sort((a, b) => {
     const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
     const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
@@ -352,12 +411,12 @@ export function markDuplicatePunches(
   records: AttendanceRecord[],
   cooldownMinutes: number = 60
 ): AttendanceRecord[] {
-  return processSmartAttendanceLogs(records);
+  return processSmartAttendanceLogs(records, { duplicateWindowMinutes: cooldownMinutes });
 }
 
 /**
  * Calculate worker daily attendance performance, overtime, and late minutes.
- * Incorporates Point 13: departure grace window (e.g. 16:30 - 16:45 is normal departure, 0 overtime).
+ * Incorporates Point 6: factory departure grace (30 min). If exceeded, overtime is counted from shift end!
  */
 export function calculateDailyPerformance(
   worker: Worker,
@@ -365,7 +424,7 @@ export function calculateDailyPerformance(
   checkOut: AttendanceRecord | undefined,
   shift: ShiftRule,
   isFriday: boolean = false,
-  departureGraceMinutes: number = 15
+  departureGraceMinutes: number = 30
 ) {
   if (!checkIn) {
     return {
@@ -624,5 +683,225 @@ export function exportToCsv(data: Record<string, any>[], fileName: string) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export interface DailyAbsenceExportItem {
+  index: number;
+  code: number;
+  name: string;
+  department: string;
+  line: string;
+  jobTitle: string;
+  nationality: string;
+  absenceCategory: string;
+  absenceKey: string;
+  note: string;
+}
+
+export interface DailyAbsenceExportData {
+  factoryName: string;
+  reportDate: string;
+  totalWorkers: number;
+  presentCount: number;
+  absentCount: number;
+  presentPercent: string;
+  absentPercent: string;
+  records: DailyAbsenceExportItem[];
+}
+
+/**
+ * Professional ERP-Style Excel Export for Daily Absence Reports
+ * Uses ExcelJS for native formatting, RTL direction, merged headers, summary KPIs, cell borders, and colors.
+ */
+export async function exportProfessionalAbsenceExcel(
+  info: DailyAbsenceExportData,
+  fileName: string
+) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'نظام إدارة ماكينات البصمة';
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet('تقرير الغياب اليومي', {
+    views: [{ rightToLeft: true } as any],
+  });
+
+  // 1. Row 1: Merged Title (Factory Name + Report Title + Date)
+  worksheet.mergeCells('A1:I1');
+  const titleCell = worksheet.getCell('A1');
+  titleCell.value = `${info.factoryName || 'إدارة المصنع'} — تقرير الغياب اليومي (${info.reportDate})`;
+  titleCell.font = { name: 'Segoe UI', size: 15, bold: true, color: { argb: 'FFFFFFFF' } };
+  titleCell.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF1E293B' }, // Dark slate
+  };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+  worksheet.getRow(1).height = 36;
+
+  // 2. Row 2: Spacer
+  worksheet.getRow(2).height = 8;
+
+  // 3. Row 3: Executive Summary Row (Total Workers, Present, Absent, Rates)
+  worksheet.mergeCells('A3:B3');
+  const sumTotal = worksheet.getCell('A3');
+  sumTotal.value = `إجمالي القوة: ${info.totalWorkers} عامل`;
+  sumTotal.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+  sumTotal.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+  sumTotal.alignment = { vertical: 'middle', horizontal: 'center' };
+
+  worksheet.mergeCells('C3:D3');
+  const sumPresent = worksheet.getCell('C3');
+  sumPresent.value = `الحضور الفعلي: ${info.presentCount} (${info.presentPercent}%)`;
+  sumPresent.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+  sumPresent.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+  sumPresent.alignment = { vertical: 'middle', horizontal: 'center' };
+
+  worksheet.mergeCells('E3:F3');
+  const sumAbsent = worksheet.getCell('E3');
+  sumAbsent.value = `إجمالي الغياب: ${info.absentCount} (${info.absentPercent}%)`;
+  sumAbsent.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
+  sumAbsent.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+  sumAbsent.alignment = { vertical: 'middle', horizontal: 'center' };
+
+  worksheet.mergeCells('G3:I3');
+  const sumDate = worksheet.getCell('G3');
+  sumDate.value = `تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG')} - ${new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`;
+  sumDate.font = { name: 'Segoe UI', size: 9, bold: false, color: { argb: 'FF475569' } };
+  sumDate.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+  sumDate.alignment = { vertical: 'middle', horizontal: 'center' };
+
+  // Set borders for Row 3 summary cells
+  ['A3', 'B3', 'C3', 'D3', 'E3', 'F3', 'G3', 'H3', 'I3'].forEach((addr) => {
+    worksheet.getCell(addr).border = {
+      top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+    };
+  });
+  worksheet.getRow(3).height = 26;
+
+  // 4. Row 4: Spacer
+  worksheet.getRow(4).height = 10;
+
+  // 5. Row 5: Table Column Headers
+  const headerRow = worksheet.getRow(5);
+  headerRow.values = [
+    'م',
+    'كود العامل',
+    'اسم العامل',
+    'القسم',
+    'خط الإنتاج',
+    'الوظيفة',
+    'الجنسية',
+    'تصنيف الغياب',
+    'ملاحظات / سبب الغياب',
+  ];
+  headerRow.height = 28;
+
+  headerRow.eachCell((cell) => {
+    cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } }; // Dark blue / navy
+    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    cell.border = {
+      top: { style: 'medium', color: { argb: 'FF0F172A' } },
+      bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
+      left: { style: 'thin', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF334155' } },
+    };
+  });
+
+  // 6. Data Rows
+  let currentRowIdx = 6;
+  for (const r of info.records) {
+    const row = worksheet.getRow(currentRowIdx);
+    row.values = [
+      r.index,
+      r.code,
+      r.name,
+      r.department,
+      r.line || '-',
+      r.jobTitle,
+      r.nationality,
+      r.absenceCategory,
+      r.note || '-',
+    ];
+    row.height = 23;
+
+    // Apply borders and base styles
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      cell.font = { name: 'Segoe UI', size: 9.5 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      };
+
+      if (colNumber === 1 || colNumber === 2 || colNumber === 5 || colNumber === 7) {
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      } else if (colNumber === 8) {
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      } else {
+        cell.alignment = { vertical: 'middle', horizontal: 'right' };
+      }
+
+      if (currentRowIdx % 2 === 0 && colNumber !== 8) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      }
+    });
+
+    // Color coding for Absence Category (Col 8) as requested:
+    // بدون إذن: red background, white text
+    // اعتيادي: green background, white text
+    // إجازة عارضة: sky background, black text
+    // إجازة مرضية: amber/brown background, black text
+    // بإذن: white background, black text
+    const categoryCell = row.getCell(8);
+    const catKey = r.absenceKey;
+    if (catKey === 'unexcused') {
+      categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEF4444' } }; // bg-red-500
+      categoryCell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    } else if (catKey === 'excused_annual') {
+      categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF22C55E' } }; // bg-green-500
+      categoryCell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    } else if (catKey === 'excused_casual') {
+      categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7DD3FC' } }; // bg-sky-300
+      categoryCell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF000000' } };
+    } else if (catKey === 'medical') {
+      categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDE68A' } }; // bg-amber-200
+      categoryCell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF000000' } };
+    } else if (catKey === 'official_pass') {
+      categoryCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }; // bg-white
+      categoryCell.font = { name: 'Segoe UI', size: 9.5, bold: true, color: { argb: 'FF000000' } };
+    }
+
+    currentRowIdx++;
+  }
+
+  // 7. Auto-adjusted column widths so text never shows #### or gets truncated
+  worksheet.columns = [
+    { key: 'index', width: 6 },
+    { key: 'code', width: 14 },
+    { key: 'name', width: 28 },
+    { key: 'department', width: 20 },
+    { key: 'line', width: 16 },
+    { key: 'jobTitle', width: 22 },
+    { key: 'nationality', width: 14 },
+    { key: 'absenceCategory', width: 20 },
+    { key: 'note', width: 32 },
+  ];
+
+  // Write to Buffer and trigger browser download
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${fileName}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
