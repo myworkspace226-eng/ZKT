@@ -12,7 +12,8 @@ import {
   X, 
   Edit2, 
   Trash2, 
-  Save 
+  Save,
+  AlertTriangle
 } from 'lucide-react';
 import { GatePass, Worker } from '../types';
 import { exportToExcel } from '../utils/attendanceEngine';
@@ -38,12 +39,13 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [selectedWorkerCode, setSelectedWorkerCode] = useState<number>(workers.length > 0 ? workers[0].code : 0);
   const [passDate, setPassDate] = useState<string>(todayStr);
-  const [passType, setPassType] = useState<'temporary' | 'rest_of_day'>('temporary');
-  const [passReason, setPassReason] = useState<'official_mission' | 'medical' | 'personal_with_deduction' | 'personal_excused'>('official_mission');
+  const [passType, setPassType] = useState<'temporary' | 'rest_of_day' | 'delay'>('temporary');
+  const [passReason, setPassReason] = useState<'official_mission' | 'medical' | 'personal_with_deduction' | 'personal_excused' | 'delay_manager' | 'delay_family'>('official_mission');
   const [reasonDetails, setReasonDetails] = useState<string>('');
   const [exitTime, setExitTime] = useState<string>('12:00');
   const [expectedReturnTime, setExpectedReturnTime] = useState<string>('14:30');
   const [approver, setApprover] = useState<string>('شؤون العاملين');
+  const [formError, setFormError] = useState<string | null>(null);
 
   const [completingPassId, setCompletingPassId] = useState<string | null>(null);
   const [returnInputTime, setReturnInputTime] = useState<string>('14:00');
@@ -52,8 +54,8 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
   const [editingPass, setEditingPass] = useState<GatePass | null>(null);
   const [editWorkerCode, setEditWorkerCode] = useState<number>(0);
   const [editDate, setEditDate] = useState<string>('');
-  const [editType, setEditType] = useState<'temporary' | 'rest_of_day'>('temporary');
-  const [editReason, setEditReason] = useState<'official_mission' | 'medical' | 'personal_with_deduction' | 'personal_excused'>('official_mission');
+  const [editType, setEditType] = useState<'temporary' | 'rest_of_day' | 'delay'>('temporary');
+  const [editReason, setEditReason] = useState<'official_mission' | 'medical' | 'personal_with_deduction' | 'personal_excused' | 'delay_manager' | 'delay_family'>('official_mission');
   const [editReasonDetails, setEditReasonDetails] = useState<string>('');
   const [editExitTime, setEditExitTime] = useState<string>('');
   const [editReturnTime, setEditReturnTime] = useState<string>('');
@@ -66,12 +68,55 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
   // Filter state
   const [dateFilter, setDateFilter] = useState<string>('all'); // 'all' or 'today' or specific
 
-  const isSelectedDateRetroactive = passDate < todayStr;
+  const isDateRetroactive = (dateStr: string): boolean => {
+    if (!dateStr) return false;
+    const target = new Date(`${dateStr}T00:00:00`);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return target.getTime() < today.getTime();
+  };
+
+  const isSelectedDateRetroactive = isDateRetroactive(passDate);
 
   const handleCreatePass = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     const worker = workers.find((w) => w.code === selectedWorkerCode);
     if (!worker) return;
+
+    if (passType === 'temporary' && expectedReturnTime) {
+      const [eH, eM] = exitTime.split(':').map(Number);
+      const [rH, rM] = expectedReturnTime.split(':').map(Number);
+      const diff = (rH * 60 + rM) - (eH * 60 + eM);
+      if (isNaN(diff) || diff <= 0) {
+        setFormError('وقت العودة المتوقع يجب أن يكون بعد وقت الخروج');
+        return;
+      }
+    }
+
+    let approvedDelayMinutes: number | undefined = undefined;
+    if (passType === 'delay') {
+      const [sH, sM] = exitTime.split(':').map(Number);
+      const [rH, rM] = (expectedReturnTime || '').split(':').map(Number);
+      const diff = (rH * 60 + rM) - (sH * 60 + sM);
+      if (isNaN(diff) || diff <= 0) {
+        setFormError('وقت نهاية التأخير يجب أن يكون بعد وقت البداية');
+        return;
+      }
+      approvedDelayMinutes = diff;
+    }
+
+    const defaultReasonText = () => {
+      if (passType === 'delay') {
+        return `إذن تأخير معتمد (${approvedDelayMinutes} دقيقة)`;
+      }
+      if (passReason === 'official_mission') return 'مأمورية رسمية';
+      if (passReason === 'medical') return 'كشف طبي وتأمين';
+      if (passReason === 'personal_excused') return 'إذن شخصي معتمد';
+      if (passReason === 'delay_manager') return 'إذن تأخير من المدير';
+      if (passReason === 'delay_family') return 'طارئ عائلي';
+      return 'إذن شخصي مخصوم';
+    };
 
     const newPass: GatePass = {
       id: `gp-${Date.now()}`,
@@ -83,20 +128,18 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
       returnTime: passType === 'rest_of_day' ? undefined : (expectedReturnTime || undefined),
       type: passType,
       reason: passReason,
-      reasonText: reasonDetails || (
-        passReason === 'official_mission' ? 'مأمورية رسمية' :
-        passReason === 'medical' ? 'كشف طبي وتأمين' :
-        passReason === 'personal_excused' ? 'إذن شخصي معتمد' : 'إذن شخصي مخصوم'
-      ),
+      reasonText: reasonDetails.trim() || defaultReasonText(),
       approvedBy: approver || 'شؤون العاملين',
-      status: passType === 'rest_of_day' ? 'completed' : 'active',
+      status: (passType === 'rest_of_day' || passType === 'delay') ? 'completed' : 'active',
       isRetroactive: isSelectedDateRetroactive,
+      approvedDelayMinutes: approvedDelayMinutes,
     };
 
     onAddGatePass(newPass);
     setShowAddModal(false);
     setReasonDetails('');
     setPassDate(todayStr);
+    setFormError(null);
   };
 
   const handleOpenEdit = (pass: GatePass) => {
@@ -115,6 +158,27 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPass) return;
+    setFormError(null);
+
+    let editApprovedDelayMinutes: number | undefined = undefined;
+    if (editType === 'temporary' && editReturnTime) {
+      const [eH, eM] = editExitTime.split(':').map(Number);
+      const [rH, rM] = editReturnTime.split(':').map(Number);
+      const diff = (rH * 60 + rM) - (eH * 60 + eM);
+      if (isNaN(diff) || diff <= 0) {
+        setFormError('وقت العودة المتوقع يجب أن يكون بعد وقت الخروج');
+        return;
+      }
+    } else if (editType === 'delay') {
+      const [sH, sM] = editExitTime.split(':').map(Number);
+      const [rH, rM] = (editReturnTime || '').split(':').map(Number);
+      const diff = (rH * 60 + rM) - (sH * 60 + sM);
+      if (isNaN(diff) || diff <= 0) {
+        setFormError('وقت نهاية التأخير يجب أن يكون بعد وقت البداية');
+        return;
+      }
+      editApprovedDelayMinutes = diff;
+    }
 
     const worker = workers.find((w) => w.code === editWorkerCode);
     const updatedPass: GatePass = {
@@ -129,14 +193,16 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
       exitTime: editExitTime,
       returnTime: editType === 'rest_of_day' ? undefined : (editReturnTime || undefined),
       approvedBy: editApprover.trim() || 'شؤون العاملين',
-      status: editType === 'rest_of_day' ? 'completed' : editStatus,
-      isRetroactive: editDate < todayStr,
+      status: (editType === 'rest_of_day' || editType === 'delay') ? 'completed' : editStatus,
+      isRetroactive: isDateRetroactive(editDate),
+      approvedDelayMinutes: editApprovedDelayMinutes,
     };
 
     if (onUpdateGatePass) {
       onUpdateGatePass(updatedPass);
     }
     setEditingPass(null);
+    setFormError(null);
   };
 
   const handleDelete = (id: string) => {
@@ -447,24 +513,48 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
                 </div>
               </div>
 
+              {formError && (
+                <div className="p-3 bg-rose-950/60 border border-rose-800/80 rounded-lg text-rose-300 text-xs flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                  <button type="button" onClick={() => setFormError(null)} className="text-slate-400 hover:text-white cursor-pointer">✕</button>
+                </div>
+              )}
+
               {/* Pass Type & Times */}
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1">
                   <label className="text-slate-300 font-medium">نوع التصريح</label>
                   <select
                     value={passType}
-                    onChange={(e) => setPassType(e.target.value as 'temporary' | 'rest_of_day')}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500"
+                    onChange={(e) => {
+                      const val = e.target.value as 'temporary' | 'rest_of_day' | 'delay';
+                      setPassType(val);
+                      setFormError(null);
+                      if (val === 'delay') {
+                        setExitTime('08:00');
+                        setExpectedReturnTime('10:00');
+                        setPassReason('delay_manager');
+                      } else if (val === 'temporary') {
+                        setExitTime('12:00');
+                        setExpectedReturnTime('14:30');
+                        setPassReason('official_mission');
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500 cursor-pointer"
                   >
                     <option value="temporary">مؤقت (خروج وعودة)</option>
                     <option value="rest_of_day">مغادرة لآخر اليوم</option>
+                    <option value="delay">إذن تأخير (بداية يوم متأخرة)</option>
                   </select>
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-slate-300 font-medium flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>وقت الخروج</span>
+                    <span>{passType === 'delay' ? 'وقت بداية التأخير (بداية الوردية)' : 'وقت الخروج'}</span>
                   </label>
                   <input
                     type="time"
@@ -475,7 +565,21 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
                   />
                 </div>
 
-                {passType === 'temporary' ? (
+                {passType === 'delay' ? (
+                  <div className="space-y-1">
+                    <label className="text-slate-300 font-medium flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>وقت نهاية التأخير (وصول العامل)</span>
+                    </label>
+                    <input
+                      type="time"
+                      value={expectedReturnTime}
+                      onChange={(e) => setExpectedReturnTime(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
+                      required
+                    />
+                  </div>
+                ) : passType === 'temporary' ? (
                   <div className="space-y-1">
                     <label className="text-slate-300 font-medium flex items-center gap-1">
                       <Clock className="w-3.5 h-3.5 text-emerald-400" />
@@ -500,59 +604,106 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
 
               {/* Reason Category */}
               <div className="space-y-1">
-                <label className="text-slate-300 font-medium">نوع سبب الخروج</label>
+                <label className="text-slate-300 font-medium">
+                  {passType === 'delay' ? 'سبب إذن التأخير' : 'نوع سبب الخروج'}
+                </label>
                 <div className="grid grid-cols-2 gap-2">
-                  <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
-                    passReason === 'official_mission' ? 'bg-blue-600/20 border-blue-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="reason"
-                      checked={passReason === 'official_mission'}
-                      onChange={() => setPassReason('official_mission')}
-                      className="hidden"
-                    />
-                    <span>مأمورية عمل رسمية</span>
-                  </label>
+                  {passType === 'delay' ? (
+                    <>
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        passReason === 'delay_manager' ? 'bg-blue-600/20 border-blue-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="reason"
+                          checked={passReason === 'delay_manager'}
+                          onChange={() => setPassReason('delay_manager')}
+                          className="hidden"
+                        />
+                        <span>إذن تأخير من المدير</span>
+                      </label>
 
-                  <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
-                    passReason === 'medical' ? 'bg-purple-600/20 border-purple-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="reason"
-                      checked={passReason === 'medical'}
-                      onChange={() => setPassReason('medical')}
-                      className="hidden"
-                    />
-                    <span>كشف طبي / تأمين صحي</span>
-                  </label>
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        passReason === 'delay_family' ? 'bg-purple-600/20 border-purple-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="reason"
+                          checked={passReason === 'delay_family'}
+                          onChange={() => setPassReason('delay_family')}
+                          className="hidden"
+                        />
+                        <span>طارئ عائلي</span>
+                      </label>
 
-                  <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
-                    passReason === 'personal_excused' ? 'bg-emerald-600/20 border-emerald-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="reason"
-                      checked={passReason === 'personal_excused'}
-                      onChange={() => setPassReason('personal_excused')}
-                      className="hidden"
-                    />
-                    <span>شخصي معتمد (بدون خصم)</span>
-                  </label>
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        passReason === 'personal_excused' ? 'bg-emerald-600/20 border-emerald-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="reason"
+                          checked={passReason === 'personal_excused'}
+                          onChange={() => setPassReason('personal_excused')}
+                          className="hidden"
+                        />
+                        <span>شخصي معتمد</span>
+                      </label>
+                    </>
+                  ) : (
+                    <>
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        passReason === 'official_mission' ? 'bg-blue-600/20 border-blue-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="reason"
+                          checked={passReason === 'official_mission'}
+                          onChange={() => setPassReason('official_mission')}
+                          className="hidden"
+                        />
+                        <span>مأمورية عمل رسمية</span>
+                      </label>
 
-                  <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
-                    passReason === 'personal_with_deduction' ? 'bg-rose-600/20 border-rose-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="reason"
-                      checked={passReason === 'personal_with_deduction'}
-                      onChange={() => setPassReason('personal_with_deduction')}
-                      className="hidden"
-                    />
-                    <span>شخصي (يخصم من الساعات)</span>
-                  </label>
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        passReason === 'medical' ? 'bg-purple-600/20 border-purple-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="reason"
+                          checked={passReason === 'medical'}
+                          onChange={() => setPassReason('medical')}
+                          className="hidden"
+                        />
+                        <span>كشف طبي / تأمين صحي</span>
+                      </label>
+
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        passReason === 'personal_excused' ? 'bg-emerald-600/20 border-emerald-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="reason"
+                          checked={passReason === 'personal_excused'}
+                          onChange={() => setPassReason('personal_excused')}
+                          className="hidden"
+                        />
+                        <span>شخصي معتمد (بدون خصم)</span>
+                      </label>
+
+                      <label className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                        passReason === 'personal_with_deduction' ? 'bg-rose-600/20 border-rose-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="reason"
+                          checked={passReason === 'personal_with_deduction'}
+                          onChange={() => setPassReason('personal_with_deduction')}
+                          className="hidden"
+                        />
+                        <span>شخصي (يخصم من الساعات)</span>
+                      </label>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -628,6 +779,16 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
             </div>
 
             <form onSubmit={handleSaveEdit} className="space-y-3.5 text-xs">
+              {formError && (
+                <div className="p-3 bg-rose-950/60 border border-rose-800/80 rounded-lg text-rose-300 text-xs flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>{formError}</span>
+                  </div>
+                  <button type="button" onClick={() => setFormError(null)} className="text-slate-400 hover:text-white cursor-pointer">✕</button>
+                </div>
+              )}
+
               {/* Date & Worker */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
@@ -670,18 +831,19 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
                   <label className="text-slate-300 font-medium">نوع التصريح</label>
                   <select
                     value={editType}
-                    onChange={(e) => setEditType(e.target.value as 'temporary' | 'rest_of_day')}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500"
+                    onChange={(e) => setEditType(e.target.value as 'temporary' | 'rest_of_day' | 'delay')}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:border-blue-500 cursor-pointer"
                   >
                     <option value="temporary">مؤقت (خروج وعودة)</option>
                     <option value="rest_of_day">مغادرة لآخر اليوم</option>
+                    <option value="delay">إذن تأخير (بداية يوم متأخرة)</option>
                   </select>
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-slate-300 font-medium flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>وقت الخروج</span>
+                    <span>{editType === 'delay' ? 'وقت بداية التأخير (بداية الوردية)' : 'وقت الخروج'}</span>
                   </label>
                   <input
                     type="time"
@@ -695,7 +857,7 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
                 <div className="space-y-1">
                   <label className="text-slate-300 font-medium flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>وقت العودة (الفعلي)</span>
+                    <span>{editType === 'delay' ? 'وقت نهاية التأخير (وصول العامل)' : 'وقت العودة (الفعلي)'}</span>
                   </label>
                   <input
                     type="time"

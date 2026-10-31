@@ -59,6 +59,19 @@ export function resolveSmartPunchState(
 }
 
 /**
+ * Format decimal hours into Arabic string, e.g. "2 س و 30 د" or "45 د"
+ */
+export function formatHoursAndMinutes(hoursDecimal: number): string {
+  if (!hoursDecimal || hoursDecimal <= 0) return '0 س';
+  const totalMinutes = Math.round(hoursDecimal * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (m === 0) return `${h} س`;
+  if (h === 0) return `${m} د`;
+  return `${h} س و ${m} د`;
+}
+
+/**
  * Smart Attendance Processing Engine (خوارزمية معالجة البصمات الذكية الاحترافية)
  * 1. 1-Hour Cooldown Deduplication: Ignore any punch occurring within < 60 minutes of previous accepted punch.
  * 2. Overnight Shifts Attachment: Punches between 00:00 and 05:59 AM attach to previous day as OUT if worker was checked in.
@@ -75,6 +88,8 @@ export interface SmartAttendanceOptions {
   duplicateWindowMinutes?: number; // default 60 min
   overtimeGraceMinutes?: number; // default 30 min
   overnightCutoffHour?: number; // e.g. 6 (06:00 AM)
+  shifts?: ShiftRule[];
+  fridayMultiplier?: number;
   workers?: Worker[];
   workerMap?: Map<number, Worker>;
   now?: Date;
@@ -216,12 +231,36 @@ export function processSmartAttendanceLogs(
       const isToday = workDay === todayStr;
       const isPastShiftEnd = isToday ? nowTotalMinutes >= shiftEndTotalMinutes : true;
 
+      const punchDate = new Date(`${workDay}T12:00:00`);
+      const isFriday = punchDate.getDay() === 5;
+      const workerShift = workerObj ? options?.shifts?.find((s) => s.id === workerObj.shiftId) : null;
+      const effectiveFridayMultiplier = workerShift?.fridayMultiplier ?? options?.fridayMultiplier ?? 2.0;
+
+      if (isFriday) {
+        for (const p of acceptedPunches) {
+          p.isFridayDouble = true;
+          p.fridayMultiplier = effectiveFridayMultiplier;
+        }
+      }
+
       // Helper for Overtime on departure punches (Point 6: Factory Logic)
       const evaluateOvertime = (punch: AttendanceRecord, punchMinutes: number) => {
+        if (isFriday) {
+          punch.isFridayDouble = true;
+          punch.fridayMultiplier = effectiveFridayMultiplier;
+        }
+
         if (punch.isHROverride && punch.overtimeHours !== undefined) {
           punch.isOvertime = punch.overtimeHours > 0;
           return;
         }
+
+        if (isFriday) {
+          punch.isOvertime = true;
+          punch.overtimeHours = 8 * effectiveFridayMultiplier;
+          return;
+        }
+
         // If departure is past shiftEnd + overtimeGraceMinutes (e.g. 30 mins)
         const minutesPastEnd = punchMinutes - shiftEndTotalMinutes;
         if (minutesPastEnd > overtimeGraceMinutes) {
@@ -292,25 +331,40 @@ export function processSmartAttendanceLogs(
           }
           p.isEarlyDeparture = false;
         }
-        // Rule 4: Ambiguous Window (12:00 to 15:59 -> 720 to 959 minutes)
+        // Rule 4: Ambiguous Window (12:00 to 15:59 -> 720 to 959 minutes) (Bug 2 Fix: 3 Options)
         else if (pMinutes >= 720 && pMinutes < 960) {
           if (p.ambiguousResolution === 'temporary_pass') {
             p.resolvedState = 'OUT';
             p.isAmbiguousSinglePunch = false;
             p.missingInPunch = false;
+            p.isMissedPunch = false;
             p.manualNote = p.manualNote || `تصريح مؤقت (عودة متوقعة: ${p.expectedReturnTime || '-'})`;
           } else if (p.ambiguousResolution === 'final_out') {
             p.resolvedState = 'OUT';
             p.isAmbiguousSinglePunch = false;
             p.missingInPunch = false;
+            p.isMissedPunch = false;
             evaluateEarlyDeparture(p, pMinutes);
+          } else if (p.ambiguousResolution === 'late_in') {
+            p.resolvedState = 'IN';
+            p.isAmbiguousSinglePunch = false;
+            p.missingInPunch = false;
+            p.isMissedPunch = false;
+            const [sH, sM] = (options?.shiftStartTime || '08:00').split(':').map((v) => parseInt(v, 10) || 0);
+            const shiftStartMinutes = sH * 60 + sM;
+            const graceMinutes = (workerShift?.generalGraceMinutes ?? 15) + (workerObj?.customGraceMinutes || 0);
+            const diff = Math.max(0, pMinutes - (shiftStartMinutes + graceMinutes));
+            p.lateMinutes = diff;
+            p.manualNote = p.manualNote || (diff > 0 
+              ? `اعتماد حضور متأخر (+${diff} د تأخير بعد سماحية ${graceMinutes} د) من قِبل HR`
+              : `اعتماد حضور ضمن فترة السماحية (${graceMinutes} د)`);
           } else {
-            // Unresolved: Popup required for HR decision
+            // Unresolved: Popup required for HR decision (3 options: temporary_pass / final_out / late_in)
             p.isAmbiguousSinglePunch = true;
             p.ambiguousResolution = 'pending';
             p.isMissedPunch = true;
             p.missedPunchType = 'AMBIGUOUS';
-            p.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت أم انصراف نهائي؟)';
+            p.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
           }
         }
         // Rule 5: Post-12 PM / Afternoon Window (16:00 onwards -> >= 960 minutes or early morning < 360)
@@ -339,51 +393,134 @@ export function processSmartAttendanceLogs(
           if (fMinutes >= 360 && fMinutes < 720) {
             first.resolvedState = 'IN';
             first.missingInPunch = false;
+            first.isAmbiguousSinglePunch = false;
+            first.isMissedPunch = false;
           } else if (fMinutes >= 720 && fMinutes < 960) {
-            first.resolvedState = first.ambiguousResolution === 'final_out' ? 'OUT' : 'IN';
+            // First punch falls in ambiguous window (Bug 2 & 3: Respect HR decision)
+            if (first.ambiguousResolution === 'late_in') {
+              first.resolvedState = 'IN';
+              first.isAmbiguousSinglePunch = false;
+              first.missingInPunch = false;
+              first.isMissedPunch = false;
+              const [sH, sM] = (options?.shiftStartTime || '08:00').split(':').map((v) => parseInt(v, 10) || 0);
+              const shiftStartMinutes = sH * 60 + sM;
+              const diff = Math.max(0, fMinutes - shiftStartMinutes);
+              first.lateMinutes = diff;
+              first.manualNote = first.manualNote || `اعتماد حضور متأخر (+${diff} د) من قِبل HR`;
+            } else if (first.ambiguousResolution === 'temporary_pass' || first.ambiguousResolution === 'final_out') {
+              first.resolvedState = 'OUT';
+              first.isAmbiguousSinglePunch = false;
+              first.isMissedPunch = false;
+            } else {
+              first.isAmbiguousSinglePunch = true;
+              first.ambiguousResolution = 'pending';
+              first.isMissedPunch = true;
+              first.missedPunchType = 'AMBIGUOUS';
+              first.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
+            }
           } else {
             first.resolvedState = 'OUT';
             first.missingInPunch = true;
+            first.isAmbiguousSinglePunch = false;
             first.missedPunchReason = 'بصمة حضور ناقصة (Missing IN)';
           }
         }
         first.isDuplicateIgnored = false;
-        first.isAmbiguousSinglePunch = false;
-        first.isMissedPunch = false;
         processedAll.push(first);
 
         const last = acceptedPunches[acceptedPunches.length - 1];
         const [lHStr, lMStr] = (last.displayTime || '16:30').split(':');
         const lMinutes = (parseInt(lHStr, 10) || 16) * 60 + (parseInt(lMStr, 10) || 30);
 
-        // Rule 3 (Early OUT): If second punch is after morning check-in and before shift end
+        // Bug 3 Fix: If second (or last) punch falls in ambiguous window (12:00 - 15:59),
+        // FORBIDDEN to automatically consider it OUT! It MUST prompt HR with the 3 options.
         if (!last.isHROverride) {
-          last.resolvedState = 'OUT';
-          evaluateEarlyDeparture(last, lMinutes);
-          evaluateOvertime(last, lMinutes);
+          if (lMinutes >= 720 && lMinutes < 960) {
+            // Ambiguous window!
+            if (last.ambiguousResolution === 'temporary_pass') {
+              last.resolvedState = 'OUT';
+              last.isAmbiguousSinglePunch = false;
+              last.isMissedPunch = false;
+              last.manualNote = last.manualNote || `تصريح مؤقت (عودة متوقعة: ${last.expectedReturnTime || '-'})`;
+            } else if (last.ambiguousResolution === 'final_out') {
+              last.resolvedState = 'OUT';
+              last.isAmbiguousSinglePunch = false;
+              last.isMissedPunch = false;
+              evaluateEarlyDeparture(last, lMinutes);
+            } else if (last.ambiguousResolution === 'late_in') {
+              last.resolvedState = 'IN';
+              last.isAmbiguousSinglePunch = false;
+              last.isMissedPunch = false;
+              const [sH, sM] = (options?.shiftStartTime || '08:00').split(':').map((v) => parseInt(v, 10) || 0);
+              const shiftStartMinutes = sH * 60 + sM;
+              const diff = Math.max(0, lMinutes - shiftStartMinutes);
+              last.lateMinutes = diff;
+              last.manualNote = last.manualNote || `اعتماد حضور متأخر (+${diff} د) من قِبل HR`;
+            } else {
+              // Not resolved yet: Prompt HR!
+              last.isAmbiguousSinglePunch = true;
+              last.ambiguousResolution = 'pending';
+              last.isMissedPunch = true;
+              last.missedPunchType = 'AMBIGUOUS';
+              last.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
+            }
+          } else if (lMinutes >= 960) {
+            // Post-12 PM / Afternoon checkout window (16:00 onwards)
+            last.resolvedState = 'OUT';
+            last.isAmbiguousSinglePunch = false;
+            last.isMissedPunch = false;
+            evaluateEarlyDeparture(last, lMinutes);
+            evaluateOvertime(last, lMinutes);
+          } else {
+            // Rule 3: Second punch in morning (< 12:00) with cooldown satisfied is early OUT
+            last.resolvedState = 'OUT';
+            last.isAmbiguousSinglePunch = false;
+            last.isMissedPunch = false;
+            evaluateEarlyDeparture(last, lMinutes);
+          }
         }
         last.isDuplicateIgnored = false;
-        last.isAmbiguousSinglePunch = false;
-        last.isMissedPunch = false;
         processedAll.push(last);
 
         // Intermediate punches (Punches between first and last)
         for (let i = 1; i < acceptedPunches.length - 1; i++) {
           const mid = acceptedPunches[i];
+          const [mHStr, mMStr] = (mid.displayTime || '12:00').split(':');
+          const mMinutes = (parseInt(mHStr, 10) || 12) * 60 + (parseInt(mMStr, 10) || 0);
 
           // If intermediate punch was a temporary pass or return from pass (Point 4)
-          if (mid.ambiguousResolution === 'temporary_pass') {
+          if (mid.isHROverride) {
+            mid.isDuplicateIgnored = false;
+          } else if (mid.ambiguousResolution === 'temporary_pass') {
             mid.resolvedState = 'OUT';
             mid.isDuplicateIgnored = false;
             mid.isAmbiguousSinglePunch = false;
+            mid.isMissedPunch = false;
+          } else if (mid.ambiguousResolution === 'final_out') {
+            mid.resolvedState = 'OUT';
+            mid.isDuplicateIgnored = false;
+            mid.isAmbiguousSinglePunch = false;
+            mid.isMissedPunch = false;
+          } else if (mid.ambiguousResolution === 'late_in') {
+            mid.resolvedState = 'IN';
+            mid.isDuplicateIgnored = false;
+            mid.isAmbiguousSinglePunch = false;
+            mid.isMissedPunch = false;
           } else if (mid.isReturnFromPass) {
             mid.resolvedState = 'IN';
             mid.isDuplicateIgnored = false;
             mid.isAmbiguousSinglePunch = false;
-          } else if (mid.isHROverride) {
+            mid.isMissedPunch = false;
+          } else if (mMinutes >= 720 && mMinutes < 960) {
+            // Bug 3: Intermediate punch in ambiguous window that hasn't been decided yet
+            mid.isAmbiguousSinglePunch = true;
+            mid.ambiguousResolution = 'pending';
+            mid.isMissedPunch = true;
+            mid.missedPunchType = 'AMBIGUOUS';
+            mid.missedPunchReason = 'بصمة بينية في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
             mid.isDuplicateIgnored = false;
           } else {
-            // General intermediate punch
+            // General intermediate punch outside ambiguous window
             mid.isDuplicateIgnored = true;
             mid.duplicateReason = 'بصمة بينية (تم اعتماد الأولى كحضور والأخيرة كانصراف)';
           }
@@ -548,7 +685,7 @@ export function exportToExcel(
     // 1. Right-to-Left (RTL) mode for Arabic
     ws['!views'] = [{ RTL: true }];
 
-    // 2. Auto-compute column widths based on longest cell content in each column
+    // 2. Auto-compute column widths with generous padding and Arabic character consideration
     const keys = Object.keys(data[0] || {});
     const colWidths = keys.map((key) => {
       let maxLen = key.length * 1.5;
@@ -556,12 +693,14 @@ export function exportToExcel(
         const val = row[key];
         if (val !== undefined && val !== null) {
           const str = String(val);
-          if (str.length * 1.3 > maxLen) {
-            maxLen = str.length * 1.3;
+          const isArabic = /[\u0600-\u06FF]/.test(str);
+          const charLen = isArabic ? str.length * 1.4 : str.length * 1.1;
+          if (charLen > maxLen) {
+            maxLen = charLen;
           }
         }
       }
-      return { wch: Math.max(Math.ceil(maxLen) + 3, 14) };
+      return { wch: Math.max(Math.ceil(maxLen) + 4, 15) };
     });
     ws['!cols'] = colWidths;
 
@@ -575,6 +714,7 @@ export function exportToExcel(
     }
 
     const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
     XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
     XLSX.writeFile(wb, `${fileName}.xlsx`);
   } catch (error) {

@@ -28,6 +28,26 @@ import {
 import * as XLSX from 'xlsx';
 import { Worker, Device } from '../types';
 import { exportToExcel } from '../utils/attendanceEngine';
+import { 
+  uploadUserToDevice, 
+  pullDeviceUsers, 
+  isDesktopApp 
+} from '../services/deviceConnection';
+
+// Helper to find the first unused worker code (Gap Filling)
+export function getFirstUnusedWorkerCode(workersList: Worker[]): number {
+  const existingCodes = new Set(
+    workersList
+      .map((w) => w.code)
+      .filter((c) => typeof c === 'number' && !isNaN(c) && c > 0)
+  );
+  if (existingCodes.size === 0) return 1;
+  let code = 1;
+  while (existingCodes.has(code)) {
+    code++;
+  }
+  return code;
+}
 
 // Helper to normalize Arabic names for duplicate detection
 export function normalizeArabicText(text: string): string {
@@ -97,8 +117,8 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
 
   // Add Worker Modal
   const [showAddWorkerModal, setShowAddWorkerModal] = useState<boolean>(false);
-  const [newWorkerCode, setNewWorkerCode] = useState<number>(() => {
-    return workers.length > 0 ? Math.max(...workers.map((w) => w.code)) + 1 : 101;
+  const [newWorkerCode, setNewWorkerCode] = useState<number | ''>(() => {
+    return getFirstUnusedWorkerCode(workers);
   });
   const [newWorkerName, setNewWorkerName] = useState<string>('');
   const [newWorkerDept, setNewWorkerDept] = useState<string>('إنتاج رجال');
@@ -114,6 +134,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   const [syncAction, setSyncAction] = useState<'download' | 'upload'>('download');
   const [syncTargetDeviceId, setSyncTargetDeviceId] = useState<number | 'all'>('all');
   const [isSyncingProcess, setIsSyncingProcess] = useState<boolean>(false);
+  const [syncProgress, setSyncProgress] = useState<{ current: number; total: number; message: string } | null>(null);
   const [customEnrolledCode, setCustomEnrolledCode] = useState<string>('');
 
   // Smart Duplicate Worker Detection (Groups workers with identical normalized names but different codes)
@@ -290,20 +311,77 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     setTimeout(() => setNotification(null), 6000);
   };
 
-  // Quick 1-click single worker upload to machines
-  const handleQuickUploadWorkerName = (worker: Worker) => {
-    onUpdateWorker({
-      ...worker,
-      isNameSyncedToDevice: true,
-      assignedDeviceIds: devices.map(d => d.id),
-    });
-    setNotification(`تم رفع وتثبيت اسم (${worker.name}) على الماكينات بنجاح! سيظهر اسمه الآن فوراً عند البصم على الماكينة.`);
-    setTimeout(() => setNotification(null), 6000);
+  // Quick 1-click single worker upload to machines via real hardware IPC
+  const handleQuickUploadWorkerName = async (worker: Worker) => {
+    if (!isDesktopApp()) {
+      setNotification(`❌ رفع وتثبيت الاسم على الماكينة يتطلب تشغيل البرنامج داخل تطبيق الديسكتوب (Electron) على شبكة المصنع.`);
+      setTimeout(() => setNotification(null), 6000);
+      return;
+    }
+
+    const assignedIds = worker.assignedDeviceIds && worker.assignedDeviceIds.length > 0
+      ? worker.assignedDeviceIds
+      : devices.map((d) => d.id);
+    const targetDevices = devices.filter((d) => assignedIds.includes(d.id));
+
+    if (targetDevices.length === 0) {
+      setNotification(`❌ لا توجد ماكينات مرتبطة بهذا العامل (كود #${worker.code}) في النظام للرفع إليها.`);
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+
+    setNotification(`جاري الاتصال بالماكينات ورفع اسم (${worker.name} - كود #${worker.code})...`);
+
+    let successCount = 0;
+    const deviceErrors: string[] = [];
+
+    for (const d of targetDevices) {
+      try {
+        const res = await uploadUserToDevice(d.ip, d.port, {
+          code: worker.code,
+          name: worker.name,
+          id: worker.id,
+        });
+        if (res.success) {
+          successCount++;
+        } else {
+          deviceErrors.push(`فشل الاتصال بالماكينة ${d.name}: ${res.error || res.message || 'الماكينة لا تستجيب'}`);
+        }
+      } catch (err: any) {
+        deviceErrors.push(`فشل الاتصال بالماكينة ${d.name}: ${err?.message || String(err)}`);
+      }
+    }
+
+    if (successCount > 0) {
+      onUpdateWorker({
+        ...worker,
+        isNameSyncedToDevice: true,
+      });
+      if (deviceErrors.length > 0) {
+        setNotification(`⚠️ تم رفع اسم (${worker.name}) إلى (${successCount}) ماكينات. ${deviceErrors.join(' | ')}`);
+      } else {
+        setNotification(`✅ تم بنجاح رفع وتثبيت اسم (${worker.name}) كود #${worker.code} على الماكينات! سيظهر اسمه فوراً عند البصم.`);
+      }
+    } else {
+      setNotification(`❌ ${deviceErrors[0] || 'فشل رفع الاسم إلى الماكينة'}`);
+    }
+    setTimeout(() => setNotification(null), 7000);
   };
 
   const handleCreateWorker = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newWorkerName.trim()) return;
+
+    // Point 5: Gap Filling Code Resolution
+    const resolvedCode = (typeof newWorkerCode === 'number' && newWorkerCode > 0)
+      ? newWorkerCode
+      : getFirstUnusedWorkerCode(workers);
+
+    if (workers.some(w => w.code === resolvedCode)) {
+      setNotification(`❌ الكود #${resolvedCode} مستخدم بالفعل لموظف آخر. يرجى اختيار كود غير مستخدم.`);
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
 
     // Point 7: Detect English name for Bengali workers automatically
     const isEnglishName = /^[A-Za-z\s.'-]+$/.test(newWorkerName.trim()) && newWorkerName.trim().length > 2;
@@ -311,8 +389,8 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     const finalShift = newWorkerShift === 'standard' && isEnglishName ? 'bangladeshi' : newWorkerShift;
 
     const newWorker: Worker = {
-      id: `w-${newWorkerCode}`,
-      code: newWorkerCode,
+      id: `w-${resolvedCode}`,
+      code: resolvedCode,
       name: newWorkerName.trim(),
       department: newWorkerDept.trim(),
       line: newWorkerLine.trim() || '-',
@@ -323,7 +401,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
       isActive: true,
       hasFingerprint: true,
       hasFace: false,
-      assignedDeviceIds: [101, 102],
+      assignedDeviceIds: devices.map(d => d.id),
       phone: newWorkerPhone.trim(),
       joinDate: new Date().toISOString().slice(0, 10),
       isNameSyncedToDevice: false, // Starts as pending until pushed to machine
@@ -332,7 +410,8 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     onAddWorker(newWorker);
 
     setShowAddWorkerModal(false);
-    setNewWorkerCode((prev) => prev + 1);
+    const nextCode = getFirstUnusedWorkerCode([...workers, newWorker]);
+    setNewWorkerCode(nextCode);
     setNewWorkerName('');
     setNewWorkerLine('');
     setNewWorkerPhone('');
@@ -348,40 +427,162 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     setShowAddWorkerModal(true);
   };
 
-  // Execute Batch Sync (Upload or Download)
-  const handleExecuteBiometricSync = () => {
+  // Execute Batch Sync (Upload or Download) using real hardware IPC
+  const handleExecuteBiometricSync = async () => {
+    const targetDevices = syncTargetDeviceId === 'all'
+      ? devices
+      : devices.filter((d) => d.id === syncTargetDeviceId);
+
+    if (targetDevices.length === 0) {
+      setNotification('❌ لا توجد ماكينات معرفة في النظام لتنفيذ المزامنة.');
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+
+    if (!isDesktopApp()) {
+      setNotification('❌ مزامنة ورفع بيانات العمال مع ماكينات البصمة تتطلب تشغيل البرنامج داخل بيئة الديسكتوب (Electron) على شبكة المصنع.');
+      setTimeout(() => setNotification(null), 7000);
+      return;
+    }
+
     setIsSyncingProcess(true);
-    setTimeout(() => {
+
+    if (syncAction === 'upload') {
+      const activeWorkersToSync = workers.filter(w => w.isActive);
+      if (activeWorkersToSync.length === 0) {
+        setIsSyncingProcess(false);
+        setNotification('لا يوجد عمال نشطين في النظام لرفعهم للماكينة.');
+        setTimeout(() => setNotification(null), 5000);
+        return;
+      }
+
+      let totalSuccess = 0;
+      const failedWorkersList: { name: string; code: number; machineName: string; error: string }[] = [];
+      const totalWorkersCount = activeWorkersToSync.length;
+
+      for (let i = 0; i < totalWorkersCount; i++) {
+        const w = activeWorkersToSync[i];
+        const currentNum = i + 1;
+        const progressMessage = `جاري الرفع: ${currentNum} من ${totalWorkersCount}... (${w.name})`;
+        setSyncProgress({
+          current: currentNum,
+          total: totalWorkersCount,
+          message: progressMessage,
+        });
+
+        // Determine target machines for this worker
+        let workerTargetDevices = targetDevices;
+        if (syncTargetDeviceId === 'all' && w.assignedDeviceIds && w.assignedDeviceIds.length > 0) {
+          const matched = targetDevices.filter((d) => w.assignedDeviceIds.includes(d.id));
+          if (matched.length > 0) {
+            workerTargetDevices = matched;
+          }
+        }
+
+        let workerHadSuccess = false;
+
+        for (const dev of workerTargetDevices) {
+          try {
+            const res = await uploadUserToDevice(dev.ip, dev.port, {
+              code: w.code,
+              name: w.name,
+              id: w.id,
+            });
+
+            if (res.success) {
+              workerHadSuccess = true;
+            } else {
+              failedWorkersList.push({
+                name: w.name,
+                code: w.code,
+                machineName: dev.name,
+                error: res.error || res.message || 'فشل الاتصال',
+              });
+            }
+          } catch (err: any) {
+            failedWorkersList.push({
+              name: w.name,
+              code: w.code,
+              machineName: dev.name,
+              error: err?.message || String(err),
+            });
+          }
+        }
+
+        if (workerHadSuccess) {
+          totalSuccess++;
+          onUpdateWorker({
+            ...w,
+            isNameSyncedToDevice: true,
+            assignedDeviceIds: Array.from(new Set([...w.assignedDeviceIds, ...workerTargetDevices.map((d) => d.id)])),
+          });
+        }
+      }
+
+      setIsSyncingProcess(false);
+      setSyncProgress(null);
+      setShowSyncModal(false);
+
+      const uniqueFailedCodes = Array.from(new Set(failedWorkersList.map((f) => f.code)));
+      if (uniqueFailedCodes.length === 0) {
+        setNotification(`✅ تم رفع جميع العاملين (${totalSuccess} عامل) بنجاح إلى ماكينات البصمة!`);
+      } else {
+        const failedSamples = Array.from(new Set(failedWorkersList.map((f) => `#${f.code} ${f.name} على (${f.machineName})`))).slice(0, 5).join('، ');
+        const extraCount = uniqueFailedCodes.length > 5 ? ` و${uniqueFailedCodes.length - 5} آخرين` : '';
+        setNotification(`تم رفع ${totalSuccess} عامل بنجاح، فشل ${uniqueFailedCodes.length} عمال في الماكينات: [${failedSamples}${extraCount}]`);
+      }
+      setTimeout(() => setNotification(null), 10000);
+    } else {
+      // Download Mode: Pull users registered on device
+      let totalPulled = 0;
+      let lastError = '';
+
+      for (const dev of targetDevices) {
+        try {
+          const res = await pullDeviceUsers(dev.ip, dev.port);
+          if (res.success && res.users) {
+            totalPulled += res.users.length;
+            res.users.forEach((u: any) => {
+              const uCode = Number(u.userId) || Number(u.uid);
+              if (uCode && !workers.some(w => w.code === uCode)) {
+                const isEng = /^[A-Za-z\s.'-]+$/.test(u.name) && u.name.length > 2;
+                onAddWorker({
+                  id: `w-${uCode}-${Date.now()}`,
+                  code: uCode,
+                  name: u.name || `عامل #${uCode}`,
+                  department: 'إنتاج',
+                  line: '-',
+                  jobTitle: 'عامل تشغيل',
+                  nationality: isEng ? 'بنغلاديشي' : 'مصري',
+                  shiftId: isEng ? 'bangladeshi' : 'standard',
+                  customGraceMinutes: 0,
+                  isActive: true,
+                  hasFingerprint: true,
+                  hasFace: false,
+                  assignedDeviceIds: [dev.id],
+                  joinDate: new Date().toISOString().slice(0, 10),
+                  isNameSyncedToDevice: true,
+                });
+              }
+            });
+          } else {
+            lastError = res.error || res.message;
+          }
+        } catch (err: any) {
+          lastError = err?.message || String(err);
+        }
+      }
+
       setIsSyncingProcess(false);
       setShowSyncModal(false);
 
-      if (syncAction === 'upload') {
-        workers.forEach(w => {
-          if (w.isActive && !w.isNameSyncedToDevice) {
-            onUpdateWorker({
-              ...w,
-              isNameSyncedToDevice: true,
-              assignedDeviceIds: syncTargetDeviceId === 'all' 
-                ? devices.map(d => d.id) 
-                : Array.from(new Set([...w.assignedDeviceIds, syncTargetDeviceId]))
-            });
-          }
-        });
-
-        const targetName = syncTargetDeviceId === 'all' 
-          ? `جميع ماكينات المصنع (${devices.length} ماكينات)` 
-          : devices.find((d) => d.id === syncTargetDeviceId)?.name || `ماكينة #${syncTargetDeviceId}`;
-
-        setNotification(`تم إرسال ورفع الأسماء وربطها بالأكواد بنجاح إلى (${targetName})! عند بصم العامل سيظهر اسمه فوراً على شاشة الجهاز.`);
+      if (totalPulled > 0) {
+        setNotification(`✅ تم بنجاح فحص وسحب (${totalPulled}) كود ومستخدم مسجلين على ذاكرة الماكينات.`);
       } else {
-        const sourceName = syncTargetDeviceId === 'all'
-          ? 'الماكينات المتاحة'
-          : devices.find((d) => d.id === syncTargetDeviceId)?.name || `ماكينة #${syncTargetDeviceId}`;
-
-        setNotification(`تم فحص وسحب الأكواد وقوالب البصمات من (${sourceName}) بنجاح.`);
+        setNotification(`❌ لم يتم سحب أي بيانات من الماكينة: ${lastError || 'الماكينة غير متصلة'}.`);
       }
       setTimeout(() => setNotification(null), 7000);
-    }, 1200);
+    }
   };
 
   const handleExportWorkers = () => {
@@ -478,6 +679,27 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
 
   return (
     <div className="space-y-3.5">
+      {/* Live Sync Progress Indicator (Floating bottom-right) */}
+      {syncProgress && (
+        <div className="fixed bottom-20 right-6 z-50 max-w-md bg-blue-950/95 border border-blue-600/80 text-blue-200 p-3.5 rounded-xl text-xs shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 pointer-events-auto space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-bold flex items-center gap-1.5">
+              <RefreshCcw className="w-3.5 h-3.5 animate-spin text-blue-400" />
+              <span>{syncProgress.message}</span>
+            </span>
+            <span className="font-mono font-bold text-blue-300">
+              {Math.round((syncProgress.current / syncProgress.total) * 100)}%
+            </span>
+          </div>
+          <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+            <div 
+              className="bg-blue-400 h-1.5 rounded-full transition-all duration-150"
+              style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Toast Notification (Floating bottom-right: Zero Layout Shift) */}
       {notification && (
         <div className="fixed bottom-6 right-6 z-50 max-w-md bg-emerald-950/95 border border-emerald-700/80 text-emerald-200 p-3 rounded-xl text-xs flex items-center justify-between shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 pointer-events-auto">
@@ -828,14 +1050,20 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
             <form onSubmit={handleCreateWorker} className="space-y-3.5 text-xs">
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-slate-300 font-medium block mb-1">الكود:</label>
+                  <label className="text-slate-300 font-medium block mb-1">كود العامل (ID):</label>
                   <input
                     type="number"
+                    min="1"
                     value={newWorkerCode}
-                    onChange={(e) => setNewWorkerCode(Number(e.target.value))}
+                    onChange={(e) => setNewWorkerCode(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="كود فارغ للتوليد الذكي"
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
-                    required
                   />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    {newWorkerCode === '' 
+                      ? `سيتم سد الفراغ بالكود (#${getFirstUnusedWorkerCode(workers)})` 
+                      : `أول كود شاغر متاح: #${getFirstUnusedWorkerCode(workers)}`}
+                  </span>
                 </div>
                 <div className="col-span-2">
                   <label className="text-slate-300 font-medium block mb-1">الاسم الكامل:</label>
@@ -1212,6 +1440,26 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                       <span className="text-white font-bold">{workers.filter(w => w.isActive).length} موظف</span>
                     </div>
                   </div>
+
+                  {syncProgress && (
+                    <div className="bg-blue-950/60 border border-blue-500/40 rounded-lg p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs text-blue-200">
+                        <span className="font-bold flex items-center gap-1.5">
+                          <RefreshCcw className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                          <span>{syncProgress.message}</span>
+                        </span>
+                        <span className="font-mono font-bold text-blue-300">
+                          {Math.round((syncProgress.current / syncProgress.total) * 100)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                        <div 
+                          className="bg-blue-500 h-2 rounded-full transition-all duration-150"
+                          style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1579,6 +1827,19 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
               >
                 ✕
               </button>
+            </div>
+
+            {/* Red Critical Warning for Duplicate Resolution */}
+            <div className="bg-rose-950/40 border border-rose-600/70 rounded-lg p-3 flex items-start gap-2.5 text-rose-200">
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <p className="font-bold text-rose-300">
+                  تنبيه: هذا الدمج مخصص فقط للعمال الذين تم تسجيلهم بأكواد مختلفة بالخطأ. إذا كان لديك أشخاص مختلفون يحملون نفس الاسم، فلا تقم بدمجهم.
+                </p>
+                <p className="text-[11px] text-rose-300/80">
+                  دمج شخصين مختلفين بالخطأ سيؤدي لدمج سجلات حضورهما في شخص واحد. تأكد من أن السجلات تخص نفس العامل بالفعل.
+                </p>
+              </div>
             </div>
 
             {/* Explanation & Safety Notice */}

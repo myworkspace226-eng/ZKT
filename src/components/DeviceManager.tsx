@@ -62,6 +62,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
   const [showUsbModal, setShowUsbModal] = useState<boolean>(false);
   const [usbContent, setUsbContent] = useState<string>('');
   const [notification, setNotification] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+  const [overrideUploadFilter, setOverrideUploadFilter] = useState<boolean>(false);
 
   // Modal State for Add / Edit
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -202,7 +203,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
 
   const handleTestPing = handleConnectDevice;
 
-  const handleQuickUploadUsers = async (device: Device) => {
+  const handleQuickUploadUsers = async (device: Device, forceAll: boolean = false) => {
     if (!isDesktopApp()) {
       setNotification({
         type: 'error',
@@ -212,44 +213,68 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
       return;
     }
 
-    setNotification({
-      type: 'success',
-      message: `جاري الاتصال بماكينة (${device.name}) ورفع بيانات العمال...`,
-    });
+    const allWorkers = workers || [];
+    const targetWorkers = forceAll
+      ? allWorkers
+      : allWorkers.filter((w) => w.assignedDeviceIds && w.assignedDeviceIds.includes(device.id));
 
-    const targetWorkers = workers || [];
     if (targetWorkers.length === 0) {
       setNotification({
         type: 'error',
-        message: 'لا يوجد عمال مسجلون في النظام لإرسالهم للماكينة.',
+        message: 'لا يوجد عمال مرتبطون بهذه الماكينة. قم بتعديل بيانات العمال أولاً لربطهم بهذه الماكينة أو اختر تجاوز الفلتر.',
       });
-      setTimeout(() => setNotification(null), 5000);
+      setTimeout(() => setNotification(null), 6000);
       return;
     }
 
+    setNotification({
+      type: 'success',
+      message: `جاري رفع ${targetWorkers.length} عامل من أصل ${allWorkers.length} (${forceAll ? 'جميع العمال' : 'المسجلين على الماكينة فقط'}) إلى ماكينة (${device.name})...`,
+    });
+
+    const BATCH_SIZE = 5;
     let successCount = 0;
-    for (const w of targetWorkers) {
-      const res = await uploadUserToDevice(device.ip, device.port, {
-        code: w.code,
-        name: w.name,
-        id: w.id,
-      });
-      if (res.success) {
-        successCount++;
-      } else {
-        if (successCount === 0) {
-          onUpdateDevice({
-            ...device,
-            status: 'disconnected',
-            pingMs: undefined,
-          });
-          setNotification({
-            type: 'error',
-            message: `❌ فشل الاتصال بماكينة (${device.name}): ${res.error || 'الماكينة غير متصلة على الشبكة'}.`,
-          });
-          setTimeout(() => setNotification(null), 6000);
-          return;
+    let firstFailError = '';
+
+    for (let i = 0; i < targetWorkers.length; i += BATCH_SIZE) {
+      const batch = targetWorkers.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map((w) =>
+          uploadUserToDevice(device.ip, device.port, {
+            code: w.code,
+            name: w.name,
+            id: w.id,
+          })
+        )
+      );
+
+      batchResults.forEach((res) => {
+        if (res.success) {
+          successCount++;
+        } else if (!firstFailError) {
+          firstFailError = res.error || res.message || 'الماكينة غير متصلة على الشبكة';
         }
+      });
+
+      const currentProgress = Math.min(i + BATCH_SIZE, targetWorkers.length);
+      setNotification({
+        type: 'success',
+        message: `جاري رفع ${currentProgress} من أصل ${targetWorkers.length} عامل (${forceAll ? 'جميع العمال' : 'المسجلين على الماكينة'}) إلى (${device.name})...`,
+      });
+
+      // If the first batch completely failed and zero successes, abort early
+      if (i === 0 && successCount === 0 && batch.length > 0) {
+        onUpdateDevice({
+          ...device,
+          status: 'disconnected',
+          pingMs: undefined,
+        });
+        setNotification({
+          type: 'error',
+          message: `❌ فشل الاتصال بماكينة (${device.name}): ${firstFailError}.`,
+        });
+        setTimeout(() => setNotification(null), 6000);
+        return;
       }
     }
 
@@ -261,7 +286,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
     });
     setNotification({
       type: 'success',
-      message: `✅ تم رفع وتثبيت بيانات (${successCount}) عامل إلى ماكينة (${device.name}) بنجاح!`,
+      message: `✅ تم بنجاح رفع وتثبيت بيانات (${successCount}) عامل من أصل (${targetWorkers.length}) إلى ماكينة (${device.name})!`,
     });
     setTimeout(() => setNotification(null), 6000);
   };
@@ -1045,21 +1070,49 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
 
             <div className="space-y-3 text-xs">
               <div className="bg-blue-950/30 border border-blue-800/40 rounded-lg p-3 text-slate-300 space-y-2 leading-relaxed">
-                <p className="font-semibold text-blue-300">
-                  أنت على وشك إرسال بيانات <span className="text-white font-bold">{workers.length}</span> عامل مسجل في البرنامج إلى ماكينة <span className="text-white font-bold">({deviceToUploadWorkers.name})</span>.
-                </p>
-                <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-300 pr-1">
-                  <li>سيتم تثبيت أسماء العمال وأكوادهم (User ID) على الماكينة لتظهر أسماؤهم عند البصم.</li>
-                  <li><strong className="text-emerald-400">لن يتم مسح أي بصمات مسجلة بالفعل</strong> على الماكينة.</li>
-                  <li>يمنع هذا الإجراء التعديل غير المقصود على أجهزة البصمة.</li>
-                </ul>
+                {(() => {
+                  const assignedCount = (workers || []).filter(
+                    (w) => w.assignedDeviceIds && w.assignedDeviceIds.includes(deviceToUploadWorkers.id)
+                  ).length;
+                  const countToUpload = overrideUploadFilter ? workers.length : assignedCount;
+                  return (
+                    <>
+                      <p className="font-semibold text-blue-300">
+                        أنت على وشك إرسال بيانات <span className="text-white font-bold font-mono">{countToUpload}</span> عامل إلى ماكينة <span className="text-white font-bold">({deviceToUploadWorkers.name})</span>.
+                      </p>
+                      {!overrideUploadFilter && assignedCount === 0 && (
+                        <p className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-800/50 p-2 rounded">
+                          ⚠️ لا يوجد عمال مرتبطون بهذه الماكينة. قم بتحديد العمال من شاشة "شؤون العاملين" أو تفعيل خيار "تجاوز الفلتر" بالأسفل لرفع الجميع.
+                        </p>
+                      )}
+                      <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-300 pr-1">
+                        <li>سيتم تثبيت أسماء العمال وأكوادهم (User ID) على الماكينة لتظهر أسماؤهم عند البصم.</li>
+                        <li><strong className="text-emerald-400">لن يتم مسح أي بصمات مسجلة بالفعل</strong> على الماكينة.</li>
+                      </ul>
+                      <div className="pt-2 border-t border-slate-800">
+                        <label className="flex items-center gap-2 text-slate-200 cursor-pointer font-medium">
+                          <input
+                            type="checkbox"
+                            checked={overrideUploadFilter}
+                            onChange={(e) => setOverrideUploadFilter(e.target.checked)}
+                            className="w-4 h-4 text-blue-600 rounded bg-slate-950 border-slate-700"
+                          />
+                          <span>رفع كل العمال ({workers.length} عامل) [تجاوز الفلتر]</span>
+                        </label>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
               <button
                 type="button"
-                onClick={() => setDeviceToUploadWorkers(null)}
+                onClick={() => {
+                  setDeviceToUploadWorkers(null);
+                  setOverrideUploadFilter(false);
+                }}
                 disabled={isUploadingWorkers}
                 className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
               >
@@ -1070,9 +1123,10 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                 onClick={async () => {
                   if (!deviceToUploadWorkers) return;
                   setIsUploadingWorkers(true);
-                  await handleQuickUploadUsers(deviceToUploadWorkers);
+                  await handleQuickUploadUsers(deviceToUploadWorkers, overrideUploadFilter);
                   setIsUploadingWorkers(false);
                   setDeviceToUploadWorkers(null);
+                  setOverrideUploadFilter(false);
                 }}
                 disabled={isUploadingWorkers}
                 className="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"

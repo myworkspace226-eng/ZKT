@@ -52,16 +52,31 @@ export interface DeviceActionResult {
   isDesktopNative: boolean;
 }
 
+export const DEFAULT_TIMEOUT = 5000;
+
+/**
+ * Returns the Electron ipcRenderer instance if available via window.ipcRenderer or require('electron').
+ */
+export function getIpcRenderer(): any {
+  if (typeof window === 'undefined') return null;
+  if ((window as any).ipcRenderer) return (window as any).ipcRenderer;
+  try {
+    const electron = (window as any).require && (window as any).require('electron');
+    return electron?.ipcRenderer || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Checks whether the app is currently running inside the installed Electron desktop environment.
  */
 export function isDesktopApp(): boolean {
   if (typeof window === 'undefined') return false;
-  try {
-    return Boolean((window as any).require && (window as any).require('electron'));
-  } catch {
-    return false;
-  }
+  return Boolean(
+    (window as any).ipcRenderer ||
+    ((window as any).require && (window as any).require('electron'))
+  );
 }
 
 /**
@@ -69,14 +84,12 @@ export function isDesktopApp(): boolean {
  * In desktop mode, checks active physical network interface adapters.
  */
 export async function checkNetworkConnectivity(): Promise<boolean> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-check-network');
-        if (res && typeof res.online === 'boolean') {
-          return res.online;
-        }
+      const res = await ipc.invoke('zkt-check-network');
+      if (res && typeof res.online === 'boolean') {
+        return res.online;
       }
     } catch {
       // Fallback
@@ -91,26 +104,24 @@ export async function checkNetworkConnectivity(): Promise<boolean> {
  * In desktop mode: uses native TCP socket to port 4370 + strict ICMP echo check.
  */
 export async function pingDeviceNetwork(ip: string, port: number = 4370): Promise<PingResult> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-ping-device', { ip, port, timeout: 2500 });
-        if (res && res.success) {
-          return {
-            success: true,
-            pingMs: res.pingMs || 6,
-            message: `تم الاتصال بنجاح بـ ${ip}:${port} (${res.pingMs}ms)`,
-            isDesktopNative: true,
-            warning: res.warning,
-          };
-        } else {
-          return {
-            success: false,
-            message: res?.error || `تعذر الاتصال بـ ${ip}:${port} (لم يتم الرد من الماكينة).`,
-            isDesktopNative: true,
-          };
-        }
+      const res = await ipc.invoke('zkt-ping-device', { ip, port, timeout: DEFAULT_TIMEOUT });
+      if (res && res.success) {
+        return {
+          success: true,
+          pingMs: res.pingMs || 6,
+          message: `تم الاتصال بنجاح بـ ${ip}:${port} (${res.pingMs}ms)`,
+          isDesktopNative: true,
+          warning: res.warning,
+        };
+      } else {
+        return {
+          success: false,
+          message: res?.error || `تعذر الاتصال بـ ${ip}:${port} (لم يتم الرد من الماكينة).`,
+          isDesktopNative: true,
+        };
       }
     } catch (err: any) {
       console.error('Desktop native ping error:', err);
@@ -138,21 +149,19 @@ export async function pullDeviceAttendanceLogs(
   ip: string, 
   port: number = 4370
 ): Promise<DeviceLogsResult> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-pull-logs', { ip, port, timeout: 5000 });
-        return {
-          success: Boolean(res && res.success),
-          pingMs: res?.pingMs,
-          records: res?.records || [],
-          deviceInfo: res?.deviceInfo,
-          message: res?.message || `تم سحب الحركات بنجاح من ${ip}`,
-          error: res?.error,
-          isDesktopNative: true,
-        };
-      }
+      const res = await ipc.invoke('zkt-pull-logs', { ip, port, timeout: DEFAULT_TIMEOUT });
+      return {
+        success: Boolean(res && res.success),
+        pingMs: res?.pingMs,
+        records: res?.records || [],
+        deviceInfo: res?.deviceInfo,
+        message: res?.message || `تم سحب الحركات بنجاح من ${ip}`,
+        error: res?.error,
+        isDesktopNative: true,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -180,19 +189,17 @@ export async function pullDeviceUsers(
   ip: string, 
   port: number = 4370
 ): Promise<DeviceUsersResult> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-pull-users', { ip, port, timeout: 5000 });
-        return {
-          success: Boolean(res && res.success),
-          users: res?.users || [],
-          message: res?.message || `تم سحب العمال من ${ip}`,
-          error: res?.error,
-          isDesktopNative: true,
-        };
-      }
+      const res = await ipc.invoke('zkt-pull-users', { ip, port, timeout: DEFAULT_TIMEOUT });
+      return {
+        success: Boolean(res && res.success),
+        users: res?.users || [],
+        message: res?.message || `تم سحب العمال من ${ip}`,
+        error: res?.error,
+        isDesktopNative: true,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -220,18 +227,16 @@ export async function uploadUserToDevice(
   port: number = 4370,
   user: { code: number; name: string; id?: string | number }
 ): Promise<DeviceActionResult> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-upload-user', { ip, port, user, timeout: 5000 });
-        return {
-          success: Boolean(res && res.success),
-          message: res?.message || `تم رفع العامل إلى الماكينة`,
-          error: res?.error,
-          isDesktopNative: true,
-        };
-      }
+      const res = await ipc.invoke('zkt-upload-user', { ip, port, user, timeout: DEFAULT_TIMEOUT });
+      return {
+        success: Boolean(res && res.success),
+        message: res?.message || `تم رفع العامل إلى الماكينة`,
+        error: res?.error,
+        isDesktopNative: true,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -256,18 +261,16 @@ export async function syncDeviceTime(
   ip: string,
   port: number = 4370
 ): Promise<DeviceActionResult> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-sync-time', { ip, port, timeout: 5000 });
-        return {
-          success: Boolean(res && res.success),
-          message: res?.message || `تم ضبط ساعة الماكينة`,
-          error: res?.error,
-          isDesktopNative: true,
-        };
-      }
+      const res = await ipc.invoke('zkt-sync-time', { ip, port, timeout: DEFAULT_TIMEOUT });
+      return {
+        success: Boolean(res && res.success),
+        message: res?.message || `تم ضبط ساعة الماكينة`,
+        error: res?.error,
+        isDesktopNative: true,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -293,18 +296,16 @@ export async function clearDeviceAttendanceLog(
   ip: string,
   port: number = 4370
 ): Promise<DeviceActionResult> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-clear-attendance-log', { ip, port, timeout: 8000 });
-        return {
-          success: Boolean(res && res.success),
-          message: res?.message || `تم تفريغ ذاكرة الحركات للماكينة بنجاح`,
-          error: res?.error,
-          isDesktopNative: true,
-        };
-      }
+      const res = await ipc.invoke('zkt-clear-attendance-log', { ip, port, timeout: DEFAULT_TIMEOUT });
+      return {
+        success: Boolean(res && res.success),
+        message: res?.message || `تم تفريغ ذاكرة الحركات للماكينة بنجاح`,
+        error: res?.error,
+        isDesktopNative: true,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -329,17 +330,15 @@ export async function disconnectDevice(
   ip: string,
   port: number = 4370
 ): Promise<DeviceActionResult> {
-  if (isDesktopApp()) {
+  const ipc = getIpcRenderer();
+  if (ipc) {
     try {
-      const electron = (window as any).require('electron');
-      if (electron && electron.ipcRenderer) {
-        const res = await electron.ipcRenderer.invoke('zkt-disconnect-device', { ip, port });
-        return {
-          success: Boolean(res && res.success),
-          message: res?.message || `تم إلغاء الاتصال بالماكينة (${ip}) بنجاح`,
-          isDesktopNative: true,
-        };
-      }
+      const res = await ipc.invoke('zkt-disconnect-device', { ip, port });
+      return {
+        success: Boolean(res && res.success),
+        message: res?.message || `تم إلغاء الاتصال بالماكينة (${ip}) بنجاح`,
+        isDesktopNative: true,
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -351,8 +350,8 @@ export async function disconnectDevice(
   }
 
   return {
-    success: true,
-    message: `تم إلغاء الاتصال بالماكينة (${ip}) بنجاح.`,
+    success: false,
+    message: 'أنت لا تعمل في بيئة الديسكتوب، لا يوجد اتصال لفصله.',
     isDesktopNative: false,
   };
 }

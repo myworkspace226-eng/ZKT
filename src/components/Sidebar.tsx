@@ -159,7 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3 border-t border-slate-800/80 text-[10px] text-slate-400 bg-slate-950/40 shrink-0">
         <div className="flex items-center justify-between font-mono">
           <span title="مطور النظام">المطور: Muhammad Abdullah</span>
-          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 4.0.0</span>
+          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 5.5.0</span>
         </div>
       </div>
     </aside>

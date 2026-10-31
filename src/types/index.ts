@@ -72,7 +72,7 @@ export interface AttendanceRecord {
   lateMinutes?: number;
   isMissedPunch?: boolean;
   isAmbiguousSinglePunch?: boolean;
-  ambiguousResolution?: 'pending' | 'temporary_pass' | 'final_out';
+  ambiguousResolution?: 'pending' | 'temporary_pass' | 'final_out' | 'late_in';
   linkedPermissionId?: string;
   expectedReturnTime?: string;
   isReturnFromPass?: boolean;
@@ -82,6 +82,8 @@ export interface AttendanceRecord {
   isEarlyDeparture?: boolean;
   earlyDepartureMinutes?: number;
   earlyDepartureReason?: string;
+  fridayMultiplier?: number;
+  isFridayDouble?: boolean;
 }
 
 export interface ShiftRule {
@@ -125,12 +127,13 @@ export interface GatePass {
   date: string; // YYYY-MM-DD (Supports any day/retroactive)
   exitTime: string;
   returnTime?: string;
-  type: 'temporary' | 'rest_of_day';
-  reason: 'official_mission' | 'medical' | 'personal_with_deduction' | 'personal_excused';
+  type: 'temporary' | 'rest_of_day' | 'delay';
+  reason: 'official_mission' | 'medical' | 'personal_with_deduction' | 'personal_excused' | 'delay_manager' | 'delay_family';
   reasonText: string;
   approvedBy: string;
   status: 'active' | 'completed';
   isRetroactive?: boolean;
+  approvedDelayMinutes?: number;
 }
 
 export interface FactorySettings {
@@ -169,7 +172,7 @@ export interface HRAuditRecord {
   recordId?: string;
   recordDate: string;
   recordTime: string;
-  actionType: 'OVERRIDE_OUT_TO_IN' | 'RESOLVE_AMBIGUOUS_PASS' | 'RESOLVE_AMBIGUOUS_OUT' | 'MANUAL_EDIT' | 'ADD_MANUAL_PUNCH' | 'DELETE_PUNCH';
+  actionType: 'OVERRIDE_OUT_TO_IN' | 'RESOLVE_MISSING_IN' | 'RESOLVE_AMBIGUOUS_PASS' | 'RESOLVE_AMBIGUOUS_OUT' | 'RESOLVE_AMBIGUOUS_LATE_IN' | 'MANUAL_EDIT' | 'ADD_MANUAL_PUNCH' | 'DELETE_PUNCH';
   oldValue: string;
   newValue: string;
   reason: string;

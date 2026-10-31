@@ -22,7 +22,7 @@ import {
   INITIAL_GATE_PASSES,
   DEFAULT_FACTORY_SETTINGS
 } from './data/mockData';
-import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings, HRAuditRecord } from './types';
+import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings, HRAuditRecord, AbsenceCategory } from './types';
 import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './services/deviceConnection';
 import { resolveSmartPunchState } from './utils/attendanceEngine';
 
@@ -91,6 +91,26 @@ export default function App() {
     }
     return [];
   });
+
+  // Absence overrides persisted across application sessions and navigation
+  const [absenceOverrides, setAbsenceOverrides] = useState<Record<string, { category: AbsenceCategory; note: string }>>(() => {
+    try {
+      const saved = localStorage.getItem('zkt_absence_overrides');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error('Error loading absence overrides from localStorage', e);
+    }
+    return {};
+  });
+
+  const handleUpdateAbsenceOverrides = useCallback((newOverrides: Record<string, { category: AbsenceCategory; note: string }>) => {
+    setAbsenceOverrides(newOverrides);
+    try {
+      localStorage.setItem('zkt_absence_overrides', JSON.stringify(newOverrides));
+    } catch (e) {
+      console.error('Error immediately saving absence overrides to localStorage', e);
+    }
+  }, []);
   
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [globalNotice, setGlobalNotice] = useState<string | null>(null);
@@ -170,7 +190,7 @@ export default function App() {
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 4.0.0', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 5.5.0', 
       type: 'info' 
     }
   ]);
@@ -795,7 +815,7 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '4.0.0',
+      version: '5.5.0',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
@@ -803,6 +823,7 @@ export default function App() {
       shifts,
       gatePasses,
       attendanceRecords,
+      absenceOverrides,
     };
 
     const blob = new Blob([JSON.stringify(backupPayload, null, 2)], { type: 'application/json' });
@@ -824,6 +845,10 @@ export default function App() {
       if (data.gatePasses) setGatePasses(data.gatePasses);
       if (data.attendanceRecords) setAttendanceRecords(data.attendanceRecords);
       if (data.factorySettings) setSettings(data.factorySettings);
+      if (data.absenceOverrides) {
+        setAbsenceOverrides(data.absenceOverrides);
+        localStorage.setItem('zkt_absence_overrides', JSON.stringify(data.absenceOverrides));
+      }
       showNotification('تمت استعادة النسخة الاحتياطية وتحديث بيانات المصنع بنجاح!');
     } catch {
       showNotification('خطأ في قراءة ملف النسخة الاحتياطية. يرجى التأكد من صحة الملف.');
@@ -981,9 +1006,11 @@ export default function App() {
                 records={attendanceRecords}
                 workers={workers}
                 devices={devices}
+                shifts={shifts}
                 shiftEndTime={settings.standardShiftEnd}
                 settings={settings}
                 auditLog={auditLog}
+                gatePasses={gatePasses}
                 onAddManualRecord={handleAddManualRecord}
                 onUpdateRecord={handleUpdateRecord}
                 onDeleteRecord={handleDeleteRecord}
@@ -1021,7 +1048,10 @@ export default function App() {
                 shifts={shifts}
                 gatePasses={gatePasses}
                 devices={devices}
+                settings={settings}
                 factoryName={settings.factoryName}
+                absenceOverrides={absenceOverrides}
+                onUpdateAbsenceOverrides={handleUpdateAbsenceOverrides}
                 onSyncDevices={handleSyncAllDevices}
                 isSyncing={isSyncing}
               />

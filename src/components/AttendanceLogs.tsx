@@ -28,16 +28,18 @@ import {
   CheckCheck,
   ShieldCheck
 } from 'lucide-react';
-import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GatePass } from '../types';
+import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GatePass, PunchType, ShiftRule } from '../types';
 import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
 
 interface AttendanceLogsProps {
   records: AttendanceRecord[];
   workers: Worker[];
   devices: Device[];
+  shifts?: ShiftRule[];
   shiftEndTime?: string;
   settings?: FactorySettings;
   auditLog?: HRAuditRecord[];
+  gatePasses?: GatePass[];
   onAddManualRecord: (record: AttendanceRecord) => void;
   onUpdateRecord?: (record: AttendanceRecord) => void;
   onDeleteRecord?: (id: string) => void;
@@ -51,9 +53,11 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   records,
   workers,
   devices,
+  shifts = [],
   shiftEndTime = '16:30',
   settings,
   auditLog = [],
+  gatePasses = [],
   onAddManualRecord,
   onUpdateRecord,
   onDeleteRecord,
@@ -65,15 +69,17 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   const [selectedState, setSelectedState] = useState<string>('all');
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('all');
 
-  // Ambiguous Punch Resolution Modal State (Point 4)
+  // Ambiguous Punch Resolution Modal State (Point 4 & Bug 2)
   const [resolvingRecord, setResolvingRecord] = useState<AttendanceRecord | null>(null);
-  const [resolutionChoice, setResolutionChoice] = useState<'temporary_pass' | 'final_out'>('temporary_pass');
+  const [resolutionChoice, setResolutionChoice] = useState<'temporary_pass' | 'final_out' | 'late_in'>('temporary_pass');
   const [expectedReturnTime, setExpectedReturnTime] = useState<string>('14:30');
   const [passReason, setPassReason] = useState<string>('تصريح شخصي معتمد');
 
-  // Missing IN Quick Override Modal State (Point 5)
+  // Missing IN Quick Override Modal State (Point 5 & Bug 1)
   const [overridingRecord, setOverridingRecord] = useState<AttendanceRecord | null>(null);
-  const [overrideReason, setOverrideReason] = useState<string>('تأخر العامل عن بصمة الصباح وكان متواجداً بالعمل');
+  const [missingInTime, setMissingInTime] = useState<string>('08:00');
+  const [missingInEditor, setMissingInEditor] = useState<string>('مسؤول الموارد البشرية');
+  const [overrideReason, setOverrideReason] = useState<string>('نسيان بصمة الصباح وتواجد بالعمل');
 
   // Audit Log Modal State (Point 7)
   const [showAuditModal, setShowAuditModal] = useState<boolean>(false);
@@ -85,7 +91,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   const [editDate, setEditDate] = useState<string>('');
   const [editTime, setEditTime] = useState<string>('');
   const [editState, setEditState] = useState<'IN' | 'OUT'>('IN');
-  const [editPunchType, setEditPunchType] = useState<any>('FINGERPRINT');
+  const [editPunchType, setEditPunchType] = useState<PunchType>('FINGERPRINT');
   const [editDeviceId, setEditDeviceId] = useState<number>(0);
   const [editLateMinutes, setEditLateMinutes] = useState<number>(0);
   const [editOvertimeHours, setEditOvertimeHours] = useState<number>(0);
@@ -279,6 +285,49 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const worker = workers.find((w) => w.code === manualWorkerCode);
     if (!worker) return;
 
+    const workerShift = shifts.find((s) => s.id === worker.shiftId) || shifts[0];
+    const isFriday = new Date(`${manualDate}T12:00:00`).getDay() === 5;
+    const fridayMultiplier = workerShift?.fridayMultiplier || 2.0;
+    const otGraceMinutes = settings?.overtimeGraceMinutes ?? 30;
+
+    let isOvertime = false;
+    let overtimeHours: number | undefined = undefined;
+    let lateMinutes: number | undefined = undefined;
+    let autoNote = manualReason ? manualReason.trim() : 'تسجيل يدوي بواسطة HR';
+
+    if (manualType === 'OUT') {
+      if (isFriday) {
+        isOvertime = true;
+        overtimeHours = 8 * fridayMultiplier;
+        autoNote += ` (عمل يوم جمعة مضاعف ${fridayMultiplier}x: ${overtimeHours} س)`;
+      } else {
+        const shiftEndStr = workerShift ? workerShift.endTime : (worker.shiftId === 'bangladeshi' ? '18:30' : (settings?.standardShiftEnd || '16:30'));
+        const [endH, endM] = shiftEndStr.split(':').map((v: string) => parseInt(v, 10) || 0);
+        const shiftEndMinutes = endH * 60 + endM;
+        const [mH, mM] = manualTime.split(':').map((v: string) => parseInt(v, 10) || 0);
+        const manualMinutes = mH * 60 + mM;
+        const pastEnd = manualMinutes - shiftEndMinutes;
+
+        if (pastEnd > otGraceMinutes) {
+          isOvertime = true;
+          overtimeHours = Number((pastEnd / 60).toFixed(2));
+          autoNote += ` (إضافي متوقع: ${overtimeHours} س)`;
+        }
+      }
+    } else if (manualType === 'IN') {
+      const shiftStartStr = workerShift ? workerShift.startTime : (settings?.standardShiftStart || '08:00');
+      const [startH, startM] = shiftStartStr.split(':').map((v: string) => parseInt(v, 10) || 0);
+      const shiftStartMinutes = startH * 60 + startM;
+      const [mH, mM] = manualTime.split(':').map((v: string) => parseInt(v, 10) || 0);
+      const manualMinutes = mH * 60 + mM;
+      const graceMinutes = (workerShift ? workerShift.generalGraceMinutes : (settings?.defaultGraceMinutes ?? 15)) + (worker.customGraceMinutes || 0);
+      const diff = Math.max(0, manualMinutes - (shiftStartMinutes + graceMinutes));
+      if (diff > 0) {
+        lateMinutes = diff;
+        autoNote += ` (تأخير: ${diff} د)`;
+      }
+    }
+
     const newRecord: AttendanceRecord = {
       id: `man-${Date.now()}`,
       workerCode: worker.code,
@@ -296,7 +345,12 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       isHROverride: true,
       isMissedPunch: false,
       isDuplicateIgnored: false,
-      manualNote: manualReason || 'تسجيل يدوي بواسطة HR',
+      isOvertime,
+      overtimeHours,
+      lateMinutes,
+      isFridayDouble: isFriday,
+      fridayMultiplier: isFriday ? fridayMultiplier : undefined,
+      manualNote: autoNote,
       manualEditor: manualEditor,
     };
 
@@ -428,7 +482,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     setDeleteConfirmId(null);
   };
 
-  // Point 4: Ambiguous Window Resolution Popup Handler
+  // Point 4: Ambiguous Window Resolution Popup Handler (Bug 2 & 3: 3 Choices)
   const handleConfirmAmbiguousResolution = () => {
     if (!resolvingRecord || !onUpdateRecord) return;
     const worker = workerMap.get(resolvingRecord.workerCode);
@@ -488,13 +542,101 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           recordDate: resolvingRecord.displayDate,
           recordTime: resolvingRecord.displayTime,
           actionType: 'RESOLVE_AMBIGUOUS_PASS',
-          oldValue: 'بصمة في نافذة الغموض (12:00-15:59)',
+          oldValue: `بصمة في نافذة الغموض (${resolvingRecord.displayTime})`,
           newValue: `تصريح مؤقت حتى ${expectedReturnTime}`,
           reason: passReason,
         });
       }
+    } else if (resolutionChoice === 'late_in') {
+      // Choice 3 (Bug 2 & 3): Late IN
+      const workerShift = shifts.find((s) => s.id === worker?.shiftId) || shifts[0];
+      const shiftStartStr = workerShift ? workerShift.startTime : (settings?.standardShiftStart || '08:00');
+      const [sH, sM] = shiftStartStr.split(':').map((v: string) => parseInt(v, 10) || 0);
+      const shiftStartMinutes = sH * 60 + sM;
+      const [pHStr, pMStr] = (resolvingRecord.displayTime || '12:00').split(':');
+      const punchMinutes = (parseInt(pHStr, 10) || 12) * 60 + (parseInt(pMStr, 10) || 0);
+      const graceMinutes = (workerShift ? workerShift.generalGraceMinutes : (settings?.defaultGraceMinutes ?? 15)) + (worker?.customGraceMinutes || 0);
+      const rawLateMinutes = Math.max(0, punchMinutes - (shiftStartMinutes + graceMinutes));
+
+      // Point 1: Search GatePasses for delay permissions for this worker on this date
+      const delayPass = gatePasses.find((gp) =>
+        gp.workerCode === resolvingRecord.workerCode &&
+        gp.date === resolvingRecord.displayDate &&
+        (gp.type === 'delay' || (gp.reasonText && gp.reasonText.includes('تأخير')) || (gp.reasonText && gp.reasonText.includes('إذن تأخير')))
+      );
+
+      let approvedDelayMinutes = 0;
+      if (delayPass) {
+        if (delayPass.returnTime && delayPass.exitTime) {
+          const [eH, eM] = delayPass.exitTime.split(':').map((v) => parseInt(v, 10) || 0);
+          const [rH, rM] = delayPass.returnTime.split(':').map((v) => parseInt(v, 10) || 0);
+          approvedDelayMinutes = Math.max(0, (rH * 60 + rM) - (eH * 60 + eM));
+        } else if (delayPass.returnTime) {
+          const [rH, rM] = delayPass.returnTime.split(':').map((v) => parseInt(v, 10) || 0);
+          approvedDelayMinutes = Math.max(0, (rH * 60 + rM) - shiftStartMinutes);
+        } else {
+          approvedDelayMinutes = 120; // 2 hours default if unspecified
+        }
+      }
+
+      let calculatedLateMinutes = rawLateMinutes;
+      let lateNote = rawLateMinutes > 0 
+        ? `اعتماد حضور متأخر (+${rawLateMinutes} د تأخير بعد سماحية ${graceMinutes} د من ${shiftStartStr})`
+        : `اعتماد حضور ضمن فترة السماح (${graceMinutes} د)`;
+
+      if (delayPass && approvedDelayMinutes > 0) {
+        if (rawLateMinutes <= approvedDelayMinutes) {
+          calculatedLateMinutes = 0;
+          lateNote = `حضور متأخر بإذن (تمت تغطية التأخير بالكامل بموجب إذن التأخير حتى ${delayPass.returnTime || '-'})`;
+        } else {
+          calculatedLateMinutes = rawLateMinutes - approvedDelayMinutes;
+          lateNote = `حضور متأخر بإذن جزئي: تم خصم ${approvedDelayMinutes} دقيقة إذن، والمتبقي ${calculatedLateMinutes} دقيقة تأخير`;
+        }
+      }
+
+      if (passReason) {
+        lateNote += ` - ${passReason}`;
+      }
+
+      const updated: AttendanceRecord = {
+        ...resolvingRecord,
+        rawState: 'IN',
+        resolvedState: 'IN',
+        isAmbiguousSinglePunch: false,
+        ambiguousResolution: 'late_in',
+        lateMinutes: calculatedLateMinutes,
+        linkedPermissionId: delayPass?.id,
+        isHROverride: true,
+        isManual: true,
+        isMissedPunch: false,
+        missingInPunch: false,
+        missedPunchReason: undefined,
+        manualNote: lateNote,
+      };
+      onUpdateRecord(updated);
+
+      if (onAddAuditRecord) {
+        onAddAuditRecord({
+          id: `audit-${Date.now()}`,
+          timestamp: nowIso,
+          displayTime: curTime,
+          displayDate: curDate,
+          modifiedBy: 'مسؤول الموارد البشرية',
+          workerCode: resolvingRecord.workerCode,
+          workerName: workerName,
+          recordId: resolvingRecord.id,
+          recordDate: resolvingRecord.displayDate,
+          recordTime: resolvingRecord.displayTime,
+          actionType: 'RESOLVE_AMBIGUOUS_LATE_IN',
+          oldValue: `بصمة في نافذة الغموض (${resolvingRecord.displayTime})`,
+          newValue: calculatedLateMinutes === 0 
+            ? `حضور متأخر بإذن (0 د تأخير - مغطى بإذن)` 
+            : `اعتماد كحضور متأخر (+${calculatedLateMinutes} د تأخير)`,
+          reason: lateNote,
+        });
+      }
     } else {
-      // Final OUT
+      // Choice 2: Final OUT
       const updated: AttendanceRecord = {
         ...resolvingRecord,
         rawState: 'OUT',
@@ -523,7 +665,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           recordDate: resolvingRecord.displayDate,
           recordTime: resolvingRecord.displayTime,
           actionType: 'RESOLVE_AMBIGUOUS_OUT',
-          oldValue: 'بصمة في نافذة الغموض (12:00-15:59)',
+          oldValue: `بصمة في نافذة الغموض (${resolvingRecord.displayTime})`,
           newValue: 'انصراف نهائي',
           reason: 'اعتماد انصراف نهائي وإغلاق اليوم',
         });
@@ -533,28 +675,39 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     setResolvingRecord(null);
   };
 
-  // Point 5: Missing IN Manual Override Handler
+  // Point 5 & Bug 1 Fix: Missing IN Manual Addition Handler (Zero mutation of original OUT machine punch!)
   const handleConfirmOverrideToIn = () => {
-    if (!overridingRecord || !onUpdateRecord) return;
+    if (!overridingRecord || !onAddManualRecord) return;
     const worker = workerMap.get(overridingRecord.workerCode);
     const workerName = worker?.name || overridingRecord.workerName;
     const nowIso = new Date().toISOString();
     const curTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
     const curDate = new Date().toISOString().slice(0, 10);
 
-    const updated: AttendanceRecord = {
-      ...overridingRecord,
+    // CRITICAL: DO NOT MUTATE THE ORIGINAL OUT RECORD!
+    // Create a new manual punch for the morning IN:
+    const newInRecord: AttendanceRecord = {
+      id: `manual-in-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      workerCode: overridingRecord.workerCode,
+      workerName: workerName,
+      department: worker?.department || overridingRecord.department,
+      timestamp: `${overridingRecord.displayDate}T${missingInTime}:00`,
+      displayDate: overridingRecord.displayDate,
+      displayTime: missingInTime,
       rawState: 'IN',
       resolvedState: 'IN',
-      missingInPunch: false,
-      isMissedPunch: true,
-      missedPunchType: 'OUT',
-      missedPunchReason: 'تم تعديل البصمة إلى حضور بواسطة HR (الانصراف مفقود)',
-      isHROverride: true,
+      punchType: 'MANUAL',
+      deviceId: 0,
+      deviceName: 'تسجيل يدوي (تصحيح حضور صباحي)',
       isManual: true,
-      manualNote: `تعديل HR إلى حضور: ${overrideReason}`,
+      isHROverride: true,
+      manualEditor: missingInEditor,
+      manualNote: `تصحيح حضور ناقص (مرتبط بانصراف ${overridingRecord.displayTime}) - السبب: ${overrideReason}`,
+      missingInPunch: false,
+      isMissedPunch: false,
     };
-    onUpdateRecord(updated);
+
+    onAddManualRecord(newInRecord);
 
     // Record in Audit Log (Point 7)
     if (onAddAuditRecord) {
@@ -563,15 +716,15 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         timestamp: nowIso,
         displayTime: curTime,
         displayDate: curDate,
-        modifiedBy: 'مسؤول الموارد البشرية',
+        modifiedBy: missingInEditor,
         workerCode: overridingRecord.workerCode,
         workerName: workerName,
         recordId: overridingRecord.id,
         recordDate: overridingRecord.displayDate,
         recordTime: overridingRecord.displayTime,
-        actionType: 'OVERRIDE_OUT_TO_IN',
-        oldValue: 'انصراف (بصمة حضور ناقصة Missing IN)',
-        newValue: 'حضور (معتمد HR)',
+        actionType: 'RESOLVE_MISSING_IN',
+        oldValue: `بصمة انصراف منفردة (${overridingRecord.displayTime}) دون حضور صباحي`,
+        newValue: `إضافة بصمة حضور جديدة الساعة (${missingInTime}) والإبقاء على الانصراف دون تغيير`,
         reason: overrideReason,
       });
     }
@@ -880,19 +1033,19 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                               <AlertCircle className="w-3 h-3" />
                               <span>بصمة حضور ناقصة (Missing IN)</span>
                             </span>
-                            {onUpdateRecord && (
-                              <button
-                                onClick={() => {
-                                  setOverridingRecord(record);
-                                  setOverrideReason('تأخر العامل عن بصمة الصباح وكان متواجداً بالعمل');
-                                }}
-                                className="px-2 py-0.5 rounded bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-700 text-[10px] font-sans font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                                title="تعديل يدوي من انصراف إلى حضور"
-                              >
-                                <ArrowRightLeft className="w-3 h-3" />
-                                <span>تعديل إلى حضور</span>
-                              </button>
-                            )}
+                            <button
+                              onClick={() => {
+                                setOverridingRecord(record);
+                                setMissingInTime('08:00');
+                                setMissingInEditor('مسؤول الموارد البشرية');
+                                setOverrideReason('نسيان بصمة الصباح وتواجد بالعمل');
+                              }}
+                              className="px-2 py-0.5 rounded bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-700 text-[10px] font-sans font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                              title="إضافة بصمة حضور صباحية جديدة للعامل دون المساس ببصمة الانصراف"
+                            >
+                              <Plus className="w-3 h-3" />
+                              <span>إضافة حضور صباحي (IN)</span>
+                            </button>
                           </div>
                         ) : record.isAmbiguousSinglePunch ? (
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1424,7 +1577,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 onClick={() => setResolutionChoice('temporary_pass')}
                 className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
                   resolutionChoice === 'temporary_pass' 
-                    ? 'bg-blue-950/40 border-blue-500 text-white' 
+                    ? 'bg-amber-950/40 border-amber-500 text-white' 
                     : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
                 }`}
               >
@@ -1433,12 +1586,12 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   name="ambiguous_choice"
                   checked={resolutionChoice === 'temporary_pass'}
                   onChange={() => setResolutionChoice('temporary_pass')}
-                  className="mt-0.5 text-blue-600 focus:ring-blue-500"
+                  className="mt-0.5 text-amber-500 focus:ring-amber-500"
                 />
                 <div className="space-y-1">
-                  <span className="font-bold text-sm block">1. تصريح مؤقت (بعودة)</span>
+                  <span className="font-bold text-sm block text-amber-300">1. تصريح خروج مؤقت (بعودة)</span>
                   <span className="text-[11px] text-slate-400 block">
-                    يتم تسجيل خروج مؤقت وإصدار تصريح، واستثناء بصمة العودة من قاعدة التكرار لتسجيلها كـ "حضور بعد تصريح".
+                    تسجيل خروج مؤقت وإصدار تصريح، واستثناء بصمة العودة من قاعدة التكرار لتسجيلها كـ "حضور بعد تصريح".
                   </span>
                 </div>
               </label>
@@ -1485,9 +1638,33 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   className="mt-0.5 text-blue-600 focus:ring-blue-500"
                 />
                 <div className="space-y-1">
-                  <span className="font-bold text-sm block">2. انصراف نهائي</span>
+                  <span className="font-bold text-sm block text-blue-300">2. انصراف نهائي</span>
                   <span className="text-[11px] text-slate-400 block">
-                    تسجيل انصراف نهائي للعامل وإغلاق اليوم بدون انتظار عودة.
+                    تسجيل انصراف نهائي للعامل وإغلاق اليوم بدون انتظار عودة، واحتساب الانصراف المبكر إن وُجد.
+                  </span>
+                </div>
+              </label>
+
+              {/* Bug 2 Fix: Option 3 (Late IN) */}
+              <label 
+                onClick={() => setResolutionChoice('late_in')}
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  resolutionChoice === 'late_in' 
+                    ? 'bg-emerald-950/40 border-emerald-500 text-white' 
+                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="ambiguous_choice"
+                  checked={resolutionChoice === 'late_in'}
+                  onChange={() => setResolutionChoice('late_in')}
+                  className="mt-0.5 text-emerald-600 focus:ring-emerald-500"
+                />
+                <div className="space-y-1">
+                  <span className="font-bold text-sm block text-emerald-300">3. اعتماد كحضور متأخر (Late IN)</span>
+                  <span className="text-[11px] text-slate-400 block">
+                    اعتماد البصمة كـ حضور (IN)، ويحسب النظام التأخير آلياً من موعد بداية الوردية ({settings?.standardShiftStart || '08:00'} صباحاً) حتى وقت البصمة ({resolvingRecord.displayTime}).
                   </span>
                 </div>
               </label>
@@ -1513,15 +1690,15 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         </div>
       )}
 
-      {/* Point 5: Missing IN Manual Override Modal */}
+      {/* Point 5 & Bug 1 Fix: Missing IN Manual Addition Modal */}
       {overridingRecord && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-rose-500/40 rounded-xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+          <div className="bg-slate-900 border border-emerald-500/40 rounded-xl max-w-md w-full p-5 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2 text-rose-400">
-                <ArrowRightLeft className="w-5 h-5" />
+              <div className="flex items-center gap-2 text-emerald-400">
+                <Plus className="w-5 h-5" />
                 <h3 className="text-sm font-bold text-white">
-                  تصحيح بصمة الحضور الناقصة (Missing IN)
+                  إضافة بصمة حضور صباحي مفقودة (Missing IN)
                 </h3>
               </div>
               <button 
@@ -1532,11 +1709,13 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
               </button>
             </div>
 
-            <div className="bg-rose-950/30 border border-rose-500/30 rounded-lg p-3 text-xs text-rose-200">
-              <p className="font-bold mb-1">تنبيه النظام:</p>
-              <p>
-                تم رصد بصمة انصراف للعامل في فترة ما بعد الظهر دون وجود بصمة حضور صباحية.
-                يمكنك الآن تحويل هذه البصمة لتكون "حضور" (IN) لتوثيق تواجده الفعلي بالعمل.
+            <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-lg p-3 text-xs text-emerald-200 space-y-1">
+              <p className="font-bold flex items-center gap-1.5 text-emerald-300">
+                <CheckCheck className="w-4 h-4" />
+                <span>حماية بيانات الماكينة الأصلية:</span>
+              </p>
+              <p className="text-[11px] leading-relaxed">
+                لن يتم تغيير بصمة الانصراف الأصلية المسجلة من الماكينة (<span className="font-mono font-bold text-white">{overridingRecord.displayTime}</span>). سيقوم النظام بإضافة بصمة حضور صباحية جديدة ومستقلة لهذا اليوم لتوثيق حضور العامل مع الحفاظ الكامل على دقة السجلات.
               </p>
             </div>
 
@@ -1547,8 +1726,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 <span className="font-bold text-white">{overridingRecord.workerName} (#{overridingRecord.workerCode})</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">تاريخ ووقت البصمة:</span>
-                <span className="font-mono text-rose-300 font-bold">{overridingRecord.displayDate} @ {overridingRecord.displayTime}</span>
+                <span className="text-slate-400">بصمة الانصراف الأصلية:</span>
+                <span className="font-mono text-blue-300 font-bold">{overridingRecord.displayDate} @ {overridingRecord.displayTime}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">القسم:</span>
@@ -1556,15 +1735,40 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
               </div>
             </div>
 
+            {/* Input for missing morning check-in time */}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-300 block font-medium">وقت بصمة الحضور الصباحية:</label>
+                <input
+                  type="time"
+                  value={missingInTime}
+                  onChange={(e) => setMissingInTime(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white font-mono outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-300 block font-medium">المسؤول المنفذ:</label>
+                <input
+                  type="text"
+                  value={missingInEditor}
+                  onChange={(e) => setMissingInEditor(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+            </div>
+
             {/* Override Reason Input */}
             <div className="text-xs space-y-1">
-              <label className="text-slate-300 block font-medium">سبب تحويل الحركة إلى حضور (يوثق في سجل التدقيق):</label>
+              <label className="text-slate-300 block font-medium">سبب ومبرر إضافة الحضور (يوثق بسجل التدقيق):</label>
               <input
                 type="text"
                 value={overrideReason}
                 onChange={(e) => setOverrideReason(e.target.value)}
-                placeholder="مثلاً: تأخر العامل عن بصمة الصباح وكان متواجداً بالعمل، عطل ماكينة..."
-                className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white outline-none focus:border-rose-500"
+                placeholder="مثلاً: نسيان البصمة الصباحية وتواجده بالعمل، عطل بالماكينة..."
+                className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white outline-none focus:border-emerald-500"
                 required
               />
             </div>
@@ -1580,9 +1784,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
               <button
                 type="button"
                 onClick={handleConfirmOverrideToIn}
-                className="px-4 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-bold cursor-pointer transition-colors"
+                className="px-4 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer transition-colors"
               >
-                تحويل إلى حضور (IN) وتوثيق التدقيق
+                إضافة بصمة الحضور الصباحية وتوثيق التدقيق
               </button>
             </div>
           </div>
@@ -1644,8 +1848,10 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                         ? 'اعتماد تصريح مؤقت'
                         : item.actionType === 'RESOLVE_AMBIGUOUS_OUT'
                         ? 'اعتماد انصراف نهائي'
-                        : item.actionType === 'OVERRIDE_OUT_TO_IN'
-                        ? 'تحويل انصراف إلى حضور'
+                        : item.actionType === 'RESOLVE_AMBIGUOUS_LATE_IN'
+                        ? 'اعتماد حضور متأخر'
+                        : (item.actionType === 'RESOLVE_MISSING_IN' || item.actionType === 'OVERRIDE_OUT_TO_IN')
+                        ? 'إضافة حضور صباحي مفقود'
                         : item.actionType === 'MANUAL_EDIT'
                         ? 'تعديل يدوي'
                         : item.actionType === 'ADD_MANUAL_PUNCH'
@@ -1720,9 +1926,13 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                                 <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-bold">
                                   انصراف نهائي
                                 </span>
-                              ) : entry.actionType === 'OVERRIDE_OUT_TO_IN' ? (
-                                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
-                                  تحويل لحضور
+                              ) : entry.actionType === 'RESOLVE_AMBIGUOUS_LATE_IN' ? (
+                                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                                  حضور متأخر
+                                </span>
+                              ) : (entry.actionType === 'RESOLVE_MISSING_IN' || entry.actionType === 'OVERRIDE_OUT_TO_IN') ? (
+                                <span className="px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30 text-[10px] font-bold">
+                                  إضافة حضور صباحي مفقود
                                 </span>
                               ) : entry.actionType === 'ADD_MANUAL_PUNCH' ? (
                                 <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">

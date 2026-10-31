@@ -35,6 +35,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [formData, setFormData] = useState<FactorySettings>({ ...settings });
   const [notification, setNotification] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
+  const [pendingBackupContent, setPendingBackupContent] = useState<string | null>(null);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,12 +52,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     reader.onload = (event) => {
       const content = event.target?.result as string;
       if (content) {
-        onImportBackup(content);
-        setNotification('تمت استعادة قاعدة البيانات والنسخة الاحتياطية بنجاح.');
-        setTimeout(() => setNotification(null), 4000);
+        setPendingBackupContent(content);
       }
     };
     reader.readAsText(file);
+    e.target.value = '';
   };
 
   return (
@@ -81,7 +81,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div>
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>إعدادات النظام ومواعيد العمل</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">V 4.0.0</span>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">V 5.5.0</span>
             </h2>
             <p className="text-[11px] text-slate-400">
               تخصيص هوية المصنع، مواعيد الورديات وفترات السماح والانصراف المبكر، والنسخ الاحتياطي
@@ -345,7 +345,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">رقم إصدار البرنامج</span>
-              <span className="font-bold text-emerald-400 font-mono text-sm">V 4.0.0</span>
+              <span className="font-bold text-emerald-400 font-mono text-sm">V 5.5.0</span>
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">نمط العمل والاتصال</span>
@@ -383,6 +383,49 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 className="px-3 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium cursor-pointer"
               >
                 تأكيد الاستعادة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup Restore Confirmation Modal */}
+      {pendingBackupContent && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full p-5 space-y-3 shadow-2xl">
+            <div className="flex items-center gap-2 text-amber-400">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <h3 className="text-sm font-bold text-white">تأكيد استعادة النسخة الاحتياطية</h3>
+            </div>
+            <div className="bg-rose-950/40 border border-rose-800/60 p-3 rounded-lg text-xs space-y-1">
+              <p className="font-bold text-rose-300">
+                هل أنت متأكد من استعادة النسخة الاحتياطية؟ سيتم مسح البيانات الحالية واستبدالها.
+              </p>
+              <p className="text-[11px] text-rose-300/80">
+                هذا الإجراء سيقوم بتحديث واستبدال سجلات العمال، الإعدادات، وحركات البصمة بالبيانات الموجودة في ملف النسخة الاحتياطية.
+              </p>
+            </div>
+            <div className="pt-2 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingBackupContent(null)}
+                className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingBackupContent) {
+                    onImportBackup(pendingBackupContent);
+                    setPendingBackupContent(null);
+                    setNotification('تمت استعادة قاعدة البيانات والنسخة الاحتياطية بنجاح.');
+                    setTimeout(() => setNotification(null), 4000);
+                  }
+                }}
+                className="px-4 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                تأكيد واستبدال البيانات
               </button>
             </div>
           </div>

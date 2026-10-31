@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileSpreadsheet, 
   Download, 
@@ -27,25 +27,16 @@ import {
   User, 
   SlidersHorizontal 
 } from 'lucide-react';
-import { Worker, AttendanceRecord, ShiftRule, AbsenceCategory, GatePass, Device } from '../types';
+import { Worker, AttendanceRecord, ShiftRule, AbsenceCategory, GatePass, Device, FactorySettings } from '../types';
 import { 
   exportToExcel, 
   exportStyledExcel, 
   exportProfessionalAbsenceExcel, 
-  calculateDailyPerformance 
+  calculateDailyPerformance,
+  formatHoursAndMinutes 
 } from '../utils/attendanceEngine';
 
 const ARABIC_WEEKDAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-
-export const formatHoursAndMinutes = (hoursDecimal: number): string => {
-  if (!hoursDecimal || hoursDecimal <= 0) return '0 س';
-  const totalMinutes = Math.round(hoursDecimal * 60);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  if (m === 0) return `${h} س`;
-  if (h === 0) return `${m} د`;
-  return `${h} س و ${m} د`;
-};
 
 interface ReportsCenterProps {
   workers: Worker[];
@@ -53,7 +44,10 @@ interface ReportsCenterProps {
   shifts: ShiftRule[];
   gatePasses?: GatePass[];
   devices?: Device[];
+  settings?: FactorySettings;
   factoryName?: string;
+  absenceOverrides?: Record<string, { category: AbsenceCategory; note: string }>;
+  onUpdateAbsenceOverrides?: (overrides: Record<string, { category: AbsenceCategory; note: string }>) => void;
   onSyncDevices?: () => void;
   isSyncing?: boolean;
 }
@@ -64,7 +58,10 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   shifts,
   gatePasses = [],
   devices = [],
+  settings,
   factoryName = 'مصنع الملابس الجاهزة',
+  absenceOverrides = {},
+  onUpdateAbsenceOverrides,
   onSyncDevices,
   isSyncing = false,
 }) => {
@@ -79,8 +76,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   const [endDate, setEndDate] = useState<string>(todayStr);
   const [quickPreset, setQuickPreset] = useState<'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'custom'>('month');
 
-  // Override absence classification state for workers on the selected day
-  const [absenceOverrides, setAbsenceOverrides] = useState<Record<number, { category: AbsenceCategory; note: string }>>({});
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // WORKER DOSSIER STATE
@@ -105,10 +100,17 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
   // ADVANCED OVERTIME CONTROLS (HOURS & MINUTES ONLY - ZERO FINANCIAL VALUES)
   const [otViewMode, setOtViewMode] = useState<'summary' | 'detailed'>('summary');
-  const [otDepartureGrace, setOtDepartureGrace] = useState<number>(15);
+  const [otDepartureGrace, setOtDepartureGrace] = useState<number>(() => settings?.overtimeGraceMinutes ?? 30);
   const [otDeviceFilter, setOtDeviceFilter] = useState<string>('all');
   const [otDepartmentFilter, setOtDepartmentFilter] = useState<string>('all');
   const [otNationalityFilter, setOtNationalityFilter] = useState<string>('all');
+
+  // Sync otDepartureGrace with system settings automatically
+  useEffect(() => {
+    if (settings?.overtimeGraceMinutes !== undefined) {
+      setOtDepartureGrace(settings.overtimeGraceMinutes);
+    }
+  }, [settings?.overtimeGraceMinutes]);
 
   const handleSetPreset = (preset: 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'custom') => {
     setQuickPreset(preset);
@@ -177,17 +179,21 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         const inPunch = workerPunches.find((r) => r.resolvedState === 'IN') || workerPunches[0];
         const outPunch = workerPunches.length > 1 ? workerPunches[workerPunches.length - 1] : undefined;
 
+        const workerShift = shifts.find((s) => s.id === w.shiftId) || shifts[0];
+        const isFriday = new Date(`${selectedDay}T12:00:00`).getDay() === 5;
+        const perf = calculateDailyPerformance(w, inPunch, outPunch, workerShift, isFriday, otDepartureGrace);
+
         return {
           ...w,
           checkInTime: inPunch ? inPunch.displayTime : '08:00',
           checkOutTime: outPunch ? outPunch.displayTime : undefined,
           deviceName: inPunch ? inPunch.deviceName : 'ماكينة البصمة',
-          lateMinutes: inPunch?.lateMinutes || 0,
-          isEarlyDeparture: Boolean(outPunch?.isEarlyDeparture),
-          earlyDepartureMinutes: outPunch?.earlyDepartureMinutes || 0,
+          lateMinutes: perf.lateMinutes,
+          isEarlyDeparture: Boolean(perf.isEarlyDeparture),
+          earlyDepartureMinutes: perf.earlyDepartureMinutes || 0,
         };
       });
-  }, [activeWorkers, presentWorkerCodes, recordsOnSelectedDay]);
+  }, [activeWorkers, presentWorkerCodes, recordsOnSelectedDay, shifts, selectedDay, otDepartureGrace]);
 
   const absentWorkersList = useMemo(() => {
     return activeWorkers
@@ -197,7 +203,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         return !direct && !alias;
       })
       .map((w) => {
-        const override = absenceOverrides[w.code];
+        const override = absenceOverrides[`${selectedDay}_${w.code}`] || absenceOverrides[String(w.code)] || absenceOverrides[w.code];
         const hasGatePass = gatePasses.find((g) => Number(g.workerCode) === Number(w.code) && g.date === selectedDay);
 
         let defaultCat: AbsenceCategory = 'unexcused';
@@ -220,23 +226,41 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   }, [activeWorkers, presentWorkerCodes, absenceOverrides, gatePasses, selectedDay]);
 
   const handleUpdateWorkerAbsence = (workerCode: number, category: AbsenceCategory, note?: string) => {
-    setAbsenceOverrides((prev) => ({
-      ...prev,
+    const dayKey = `${selectedDay}_${workerCode}`;
+    const existing = absenceOverrides[dayKey] || absenceOverrides[String(workerCode)] || absenceOverrides[workerCode];
+    const updated = {
+      ...absenceOverrides,
+      [dayKey]: {
+        category,
+        note: note !== undefined ? note : (existing?.note || ''),
+      },
       [workerCode]: {
         category,
-        note: note !== undefined ? note : (prev[workerCode]?.note || ''),
+        note: note !== undefined ? note : (existing?.note || ''),
       },
-    }));
+    };
+    if (onUpdateAbsenceOverrides) {
+      onUpdateAbsenceOverrides(updated);
+    }
   };
 
   const handleUpdateWorkerNote = (workerCode: number, note: string) => {
-    setAbsenceOverrides((prev) => ({
-      ...prev,
-      [workerCode]: {
-        category: prev[workerCode]?.category || 'unexcused',
+    const dayKey = `${selectedDay}_${workerCode}`;
+    const existing = absenceOverrides[dayKey] || absenceOverrides[String(workerCode)] || absenceOverrides[workerCode];
+    const updated = {
+      ...absenceOverrides,
+      [dayKey]: {
+        category: existing?.category || 'unexcused',
         note,
       },
-    }));
+      [workerCode]: {
+        category: existing?.category || 'unexcused',
+        note,
+      },
+    };
+    if (onUpdateAbsenceOverrides) {
+      onUpdateAbsenceOverrides(updated);
+    }
   };
 
   const presentCount = presentWorkersList.length;
@@ -456,9 +480,10 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
       if (isFriday) {
         if (dayPunches.length > 0) {
-          status = 'عمل يوم الجمعة (2x)';
-          otHours = 8 * 2;
-          notes = 'يوم جمعة مضاعف 16 ساعة';
+          const fridayMult = shift?.fridayMultiplier || 2;
+          otHours = 8 * fridayMult;
+          status = `عمل يوم الجمعة (${fridayMult}x)`;
+          notes = `يوم جمعة مضاعف (${fridayMult}x) ${otHours} ساعة`;
         } else {
           status = 'عطلة أسبوعية (جمعة)';
         }
@@ -675,10 +700,12 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           let minutesPast = 0;
 
           if (isFriday) {
-            dayOtHours = 16;
+            const workerShift = shifts.find((s) => s.id === w.shiftId) || shifts[0];
+            const fridayMult = workerShift?.fridayMultiplier || 2;
+            dayOtHours = 8 * fridayMult;
             fridayOt += dayOtHours;
             otDays++;
-            statusLabel = 'عمل يوم الجمعة (مضاعف 2x - 16 ساعة)';
+            statusLabel = `عمل يوم الجمعة (مضاعف ${fridayMult}x - ${dayOtHours} ساعة)`;
           } else if (checkOut) {
             const outDate = new Date(checkOut.timestamp);
             const outMinutes = outDate.getHours() * 60 + outDate.getMinutes();
@@ -845,7 +872,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>مركز التقارير المتقدمة وتحليلات الحضور</span>
               <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">
-                V 4.0.0
+                V 5.5.0
               </span>
             </h2>
             <p className="text-[11px] text-slate-400">

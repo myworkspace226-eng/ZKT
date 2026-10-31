@@ -1,10 +1,10 @@
 {
   "name": "zkt-biometric-attendance",
-  "productName": "نظام إدارة البصمة - Muhammad Abdullah",
+  "productName": "ZKT Biometric Pro",
   "description": "نظام إدارة ماكينات البصمة ZKTeco - المطور: Muhammad Abdullah",
   "author": "Muhammad Abdullah",
   "private": true,
-  "version": "4.0.0",
+  "version": "5.5.0",
   "main": "electron-main.cjs",
   "type": "module",
   "scripts": {
