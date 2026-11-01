@@ -40,6 +40,7 @@ export type PullDatePreset = 'today' | 'yesterday' | 'week' | 'month' | 'all' | 
 interface DeviceManagerProps {
   devices: Device[];
   workers?: Worker[];
+  isSyncing?: boolean;
   onSyncDevice: (deviceId: number, dateRange?: { startDate?: string; endDate?: string }) => void;
   onSyncAllDevices: (dateRange?: { startDate?: string; endDate?: string }) => void;
   onImportUsbLogs: (fileContent: string) => void;
@@ -53,6 +54,7 @@ interface DeviceManagerProps {
 const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
   devices,
   workers = [],
+  isSyncing = false,
   onSyncDevice,
   onSyncAllDevices,
   onImportUsbLogs,
@@ -584,10 +586,13 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
 
           <button
             onClick={() => onSyncAllDevices(getEffectiveDateRange())}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors cursor-pointer"
+            disabled={isSyncing}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-medium transition-colors ${
+              isSyncing ? 'bg-blue-600/60 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 cursor-pointer'
+            }`}
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>سحب متزامن للكل</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'جاري السحب...' : 'سحب متزامن للكل'}</span>
           </button>
         </div>
       </div>
@@ -597,7 +602,7 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs font-bold text-white">نطاق سحب الحركات من الماكينات (فلترة مسبقة من السوكت لتخفيف الحمل والسرعة):</span>
+            <span className="text-xs font-bold text-white">نطاق تاريخ سحب الحركات من الماكينات:</span>
           </div>
           <span className="text-[11px] text-slate-400 font-mono">
             {pullPreset === 'all' 
@@ -768,11 +773,16 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
 
                   <button
                     onClick={() => onSyncDevice(device.id, getEffectiveDateRange())}
-                    className="w-full py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/80 transition-colors cursor-pointer text-[11px] flex items-center justify-center gap-1.5 font-medium"
+                    disabled={isSyncing || device.status === 'syncing'}
+                    className={`w-full py-1.5 px-2 rounded border border-slate-700/80 transition-colors text-[11px] flex items-center justify-center gap-1.5 font-medium ${
+                      isSyncing || device.status === 'syncing'
+                        ? 'bg-slate-800/50 text-slate-400 cursor-not-allowed'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white cursor-pointer'
+                    }`}
                     title="سحب الحركات"
                   >
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span>سحب حركات</span>
+                    <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 shrink-0 ${device.status === 'syncing' ? 'animate-spin' : ''}`} />
+                    <span>{device.status === 'syncing' ? 'جاري السحب...' : 'سحب حركات'}</span>
                   </button>
                 </div>
 

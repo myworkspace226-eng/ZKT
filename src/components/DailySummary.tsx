@@ -243,15 +243,12 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <span>لوحة ملخص اليوم التفاعلية (Daily Performance HUD)</span>
+              <span>لوحة ملخص اليوم</span>
             </h2>
             <span className="text-xs px-2 py-0.5 rounded bg-blue-600/20 text-blue-400 font-mono border border-blue-500/30">
-              V 5.6.0
+              V 5.6.1
             </span>
           </div>
-          <p className="text-xs text-slate-400 mt-1">
-            مؤشرات أداء المصنع، الحضور والغياب والتأخير والانصراف وساعات الإضافي ليوم محدد مع التحديث الفوري مع أي تعديل رجعي.
-          </p>
         </div>
 
         {/* Date Selector Controls */}
@@ -422,7 +419,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
               <span className="text-2xl font-black text-cyan-400 font-mono">{summaryData.passCount}</span>
               <span className="text-[11px] text-slate-400">تصريح رسمي معتمد</span>
             </div>
-            <span className="text-[10px] text-cyan-400/80 block mt-0.5">خروج مؤخر/شخصي/رسمي موثق بالإدارة</span>
+            <span className="text-[10px] text-cyan-400/80 block mt-0.5">أذونات خروج رسمية معتمدة بالإدارة</span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
             <ShieldCheck className="w-5 h-5" />

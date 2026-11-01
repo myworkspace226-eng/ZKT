@@ -1,6 +1,5 @@
 import React from 'react';
 import { 
-  LayoutDashboard, 
   BarChart3,
   HardDrive, 
   Fingerprint, 
@@ -14,7 +13,6 @@ import {
 } from 'lucide-react';
 
 export type ActiveTab = 
-  | 'dashboard' 
   | 'summary'
   | 'devices' 
   | 'logs' 
@@ -51,11 +49,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activityLogs = [],
 }) => {
   const menuItems = [
-    {
-      id: 'dashboard' as ActiveTab,
-      label: 'لوحة العمليات',
-      icon: LayoutDashboard,
-    },
     {
       id: 'summary' as ActiveTab,
       label: 'ملخص اليوم',
@@ -166,7 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3 border-t border-slate-800/80 text-[10px] text-slate-400 bg-slate-950/40 shrink-0">
         <div className="flex items-center justify-between font-mono">
           <span title="مطور النظام">المطور: Muhammad Abdullah</span>
-          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 5.6.0</span>
+          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 5.6.1</span>
         </div>
       </div>
     </aside>

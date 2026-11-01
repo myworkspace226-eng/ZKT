@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -7,23 +7,25 @@ import {
   RefreshCcw, 
   Fingerprint, 
   Search, 
-  ArrowRightLeft,
+  ArrowRightLeft, 
   FileSpreadsheet,
-  UploadCloud,
-  DownloadCloud,
-  CheckCircle2,
+  UploadCloud, 
+  DownloadCloud, 
+  CheckCircle2, 
   AlertTriangle,
-  HardDrive,
-  X,
-  Radio,
-  Tag,
-  Upload,
-  Edit3,
-  Save,
-  Sparkles,
-  Clock,
-  Check,
-  Trash2
+  HardDrive, 
+  X, 
+  Radio, 
+  Tag, 
+  Upload, 
+  Edit3, 
+  Save, 
+  Sparkles, 
+  Clock, 
+  Check, 
+  Trash2,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Worker, Device } from '../types';
@@ -86,6 +88,14 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   const [selectedDept, setSelectedDept] = useState<string>('all');
   const [notification, setNotification] = useState<string | null>(null);
 
+  // Pagination State (50 items per page for instant snappy rendering)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const PAGE_SIZE = 50;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterTab, searchQuery, selectedDept]);
+
   // Modals
   const [deactivatingWorker, setDeactivatingWorker] = useState<Worker | null>(null);
   const [workerToDelete, setWorkerToDelete] = useState<Worker | null>(null);
@@ -137,8 +147,10 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
   const [syncProgress, setSyncProgress] = useState<{ current: number; total: number; message: string } | null>(null);
   const [customEnrolledCode, setCustomEnrolledCode] = useState<string>('');
 
-  // Smart Duplicate Worker Detection (Groups workers with identical normalized names but different codes)
+  // Smart Duplicate Worker Detection (Lazy evaluation: only runs when modal is open to eliminate UI freeze)
   const duplicateGroups = useMemo(() => {
+    if (!showDuplicateModal) return [];
+
     const map = new Map<string, Worker[]>();
     for (const w of workers) {
       if (!w.name) continue;
@@ -167,7 +179,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     });
 
     return duplicates;
-  }, [workers]);
+  }, [showDuplicateModal, workers]);
 
   const isAdministrativeDept = useMemo(() => {
     const adminDepts = ['إدارة', 'الإدارة', 'حسابات', 'مشتريات', 'أمن', 'صيانة', 'مخازن', 'نظافة', 'بوفيه'];
@@ -201,6 +213,13 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
       return true;
     });
   }, [workers, filterTab, selectedDept, searchQuery]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredWorkers.length / PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedWorkers = useMemo(() => {
+    const start = (safeCurrentPage - 1) * PAGE_SIZE;
+    return filteredWorkers.slice(start, start + PAGE_SIZE);
+  }, [filteredWorkers, safeCurrentPage]);
 
   const handleConfirmDeactivate = () => {
     if (!deactivatingWorker) return;
@@ -885,7 +904,8 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
       {/* Table */}
       <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
         {filteredWorkers.length > 0 ? (
-          <div className="overflow-x-auto">
+          <>
+            <div className="overflow-x-auto">
             <table className="w-full text-right text-xs">
               <thead>
                 <tr className="bg-slate-950 text-slate-400 text-[11px] border-b border-slate-800">
@@ -901,7 +921,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-sans">
-                {filteredWorkers.map((worker) => (
+                {paginatedWorkers.map((worker) => (
                   <tr key={worker.id} className="hover:bg-slate-850 transition-colors">
                     <td className="py-2 px-3 font-mono font-bold text-white">
                       <div>{worker.code}</div>
@@ -1029,7 +1049,49 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
               </tbody>
             </table>
           </div>
-        ) : (
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-slate-950 border-t border-slate-800 text-xs">
+              <span className="text-slate-400 font-mono">
+                عرض {((safeCurrentPage - 1) * PAGE_SIZE) + 1} إلى {Math.min(safeCurrentPage * PAGE_SIZE, filteredWorkers.length)} من أصل {filteredWorkers.length} عامل
+              </span>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={safeCurrentPage === 1}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                    safeCurrentPage === 1
+                      ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'
+                      : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:text-white cursor-pointer'
+                  }`}
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                  <span>السابق</span>
+                </button>
+
+                <span className="px-3 py-1 bg-slate-900 border border-slate-800 rounded font-mono text-white text-xs">
+                  صفحة {safeCurrentPage} من {totalPages}
+                </span>
+
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safeCurrentPage === totalPages}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                    safeCurrentPage === totalPages
+                      ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'
+                      : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:text-white cursor-pointer'
+                  }`}
+                >
+                  <span>التالي</span>
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
           <div className="p-8 text-center text-xs text-slate-500">
             لا يوجد موظفون أو عمال يطابقون خيارات البحث الحالية.
           </div>

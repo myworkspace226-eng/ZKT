@@ -6,7 +6,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Sidebar, ActiveTab, ActivityLogEntry } from './components/Sidebar';
-import { DashboardHUD } from './components/DashboardHUD';
 import { DeviceManager } from './components/DeviceManager';
 import { AttendanceLogs } from './components/AttendanceLogs';
 import { WorkersManager } from './components/WorkersManager';
@@ -28,7 +27,7 @@ import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './ser
 import { resolveSmartPunchState, processSmartAttendanceLogs } from './utils/attendanceEngine';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('summary');
 
   // Persist devices with localStorage so custom IPs and ports are remembered
   const [devices, setDevices] = useState<Device[]>(() => {
@@ -191,7 +190,7 @@ export default function App() {
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 5.6.0', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 5.6.1', 
       type: 'info' 
     }
   ]);
@@ -482,11 +481,13 @@ export default function App() {
       return;
     }
 
+    setIsSyncing(true);
     setDevices((prev) =>
       prev.map((d) => (d.id === deviceId ? { ...d, status: 'syncing' } : d))
     );
 
-    const res = await pullDeviceAttendanceLogs(target.ip, target.port, dateRange);
+    try {
+      const res = await pullDeviceAttendanceLogs(target.ip, target.port, dateRange);
 
     if (res.success) {
       const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
@@ -597,7 +598,10 @@ export default function App() {
       );
       showNotification(`❌ فشل سحب الحركات من (${target.name}): ${res.error || res.message}`);
     }
-  }, []);
+  } finally {
+    setIsSyncing(false);
+  }
+}, []);
 
   // 3. Attendance Records Handlers
   const handleAddManualRecord = (record: AttendanceRecord) => {
@@ -830,7 +834,7 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '5.6.0',
+      version: '5.6.1',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
@@ -911,16 +915,6 @@ export default function App() {
 
         <main className="flex-1 p-5 overflow-y-auto bg-slate-950 min-h-0">
           <div className="max-w-6xl mx-auto">
-            {activeTab === 'dashboard' && (
-              <DashboardHUD
-                workers={workers}
-                attendanceRecords={processedAttendanceRecords}
-                devices={devices}
-                onNavigateToTab={(tab) => setActiveTab(tab)}
-                onSyncDevices={handleSyncAllDevices}
-              />
-            )}
-
             {activeTab === 'summary' && (
               <DailySummary
                 workers={workers}
@@ -935,6 +929,7 @@ export default function App() {
               <DeviceManager
                 devices={devices}
                 workers={workers}
+                isSyncing={isSyncing}
                 onSyncDevice={(id, dateRange) => handleSyncSingleDevice(id, dateRange)}
                 onSyncAllDevices={(dateRange) => handleSyncAllDevices(false, dateRange)}
                 onImportUsbLogs={handleImportUsbLogs}
