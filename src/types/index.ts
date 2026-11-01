@@ -60,6 +60,7 @@ export interface AttendanceRecord {
   deviceName: string;
   punchType: PunchType;
   verifyType?: number;
+  hasMorningIn?: boolean;
   isDuplicateIgnored?: boolean;
   duplicateGroup?: string;
   duplicateReason?: string;
@@ -72,7 +73,7 @@ export interface AttendanceRecord {
   lateMinutes?: number;
   isMissedPunch?: boolean;
   isAmbiguousSinglePunch?: boolean;
-  ambiguousResolution?: 'pending' | 'temporary_pass' | 'final_out' | 'late_in';
+  ambiguousResolution?: 'pending' | 'temporary_pass' | 'final_out' | 'late_in' | 'duplicate';
   linkedPermissionId?: string;
   expectedReturnTime?: string;
   isReturnFromPass?: boolean;
@@ -172,7 +173,7 @@ export interface HRAuditRecord {
   recordId?: string;
   recordDate: string;
   recordTime: string;
-  actionType: 'OVERRIDE_OUT_TO_IN' | 'RESOLVE_MISSING_IN' | 'RESOLVE_AMBIGUOUS_PASS' | 'RESOLVE_AMBIGUOUS_OUT' | 'RESOLVE_AMBIGUOUS_LATE_IN' | 'MANUAL_EDIT' | 'ADD_MANUAL_PUNCH' | 'DELETE_PUNCH';
+  actionType: 'OVERRIDE_OUT_TO_IN' | 'RESOLVE_MISSING_IN' | 'RESOLVE_AMBIGUOUS_PASS' | 'RESOLVE_AMBIGUOUS_OUT' | 'RESOLVE_AMBIGUOUS_LATE_IN' | 'RESOLVE_AMBIGUOUS_DUPLICATE' | 'MANUAL_EDIT' | 'ADD_MANUAL_PUNCH' | 'DELETE_PUNCH';
   oldValue: string;
   newValue: string;
   reason: string;

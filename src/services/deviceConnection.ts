@@ -147,12 +147,19 @@ export async function pingDeviceNetwork(ip: string, port: number = 4370): Promis
  */
 export async function pullDeviceAttendanceLogs(
   ip: string, 
-  port: number = 4370
+  port: number = 4370,
+  options?: { startDate?: string; endDate?: string }
 ): Promise<DeviceLogsResult> {
   const ipc = getIpcRenderer();
   if (ipc) {
     try {
-      const res = await ipc.invoke('zkt-pull-logs', { ip, port, timeout: DEFAULT_TIMEOUT });
+      const res = await ipc.invoke('zkt-pull-logs', { 
+        ip, 
+        port, 
+        timeout: DEFAULT_TIMEOUT,
+        startDate: options?.startDate,
+        endDate: options?.endDate,
+      });
       return {
         success: Boolean(res && res.success),
         pingMs: res?.pingMs,

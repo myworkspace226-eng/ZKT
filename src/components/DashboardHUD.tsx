@@ -25,7 +25,7 @@ interface DashboardHUDProps {
   onSyncDevices: () => void;
 }
 
-export const DashboardHUD: React.FC<DashboardHUDProps> = ({
+const DashboardHUDComponent: React.FC<DashboardHUDProps> = ({
   workers,
   attendanceRecords,
   devices,
@@ -231,3 +231,5 @@ export const DashboardHUD: React.FC<DashboardHUDProps> = ({
     </div>
   );
 };
+
+export const DashboardHUD = React.memo(DashboardHUDComponent);

@@ -13,6 +13,7 @@ import { WorkersManager } from './components/WorkersManager';
 import { GatePassManager } from './components/GatePassManager';
 import { ReportsCenter } from './components/ReportsCenter';
 import { SettingsManager } from './components/SettingsManager';
+import { DailySummary } from './components/DailySummary';
 
 import { 
   INITIAL_DEVICES, 
@@ -24,7 +25,7 @@ import {
 } from './data/mockData';
 import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings, HRAuditRecord, AbsenceCategory } from './types';
 import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './services/deviceConnection';
-import { resolveSmartPunchState } from './utils/attendanceEngine';
+import { resolveSmartPunchState, processSmartAttendanceLogs } from './utils/attendanceEngine';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -190,7 +191,7 @@ export default function App() {
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 5.5.0', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 5.6.0', 
       type: 'info' 
     }
   ]);
@@ -299,8 +300,22 @@ export default function App() {
   const shiftsRef = useRef(shifts);
   shiftsRef.current = shifts;
 
-  // 1. Parallel Sync from all machines (Real ZKTeco Communication)
-  const handleSyncAllDevices = useCallback(async (silent: boolean = false) => {
+  // Task 1: Pre-process attendance logs once with useMemo for ultra-fast navigation
+  const processedAttendanceRecords = useMemo(() => {
+    return processSmartAttendanceLogs(attendanceRecords, {
+      shiftEndTime: settings?.standardShiftEnd || '16:30',
+      bangladeshiShiftEnd: settings?.bangladeshiShiftEnd || '18:30',
+      earlyDepartureWindowMinutes: settings?.earlyDepartureWindowMinutes ?? 30,
+      duplicateWindowMinutes: settings?.duplicateWindowMinutes ?? 60,
+      overtimeGraceMinutes: settings?.overtimeGraceMinutes ?? 30,
+      overnightCutoffHour: settings?.overnightCutoffHour ?? 6,
+      workers,
+      shifts,
+    });
+  }, [attendanceRecords, workers, settings, shifts]);
+
+  // 1. Parallel Sync from all machines (Real ZKTeco Communication with optional date range filter)
+  const handleSyncAllDevices = useCallback(async (silent: boolean = false, dateRange?: { startDate?: string; endDate?: string }) => {
     if (!isDesktopApp()) {
       if (!silent) {
         showNotification('سحب الحركات التلقائي عبر الشبكة متاح داخل تطبيق الديسكتوب. في المتصفح يمكنك استخدام "استيراد ملف USB".');
@@ -331,7 +346,7 @@ export default function App() {
 
     // Query devices sequentially to keep socket communication stable
     for (const d of currentDevices) {
-      const res = await pullDeviceAttendanceLogs(d.ip, d.port);
+      const res = await pullDeviceAttendanceLogs(d.ip, d.port, dateRange);
       if (res.success) {
         connectedCount++;
         const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
@@ -452,8 +467,8 @@ export default function App() {
     }
   }, []);
 
-  // 2. Sync single device (Pull Real ZKTeco Attendance Records)
-  const handleSyncSingleDevice = useCallback(async (deviceId: number) => {
+  // 2. Sync single device (Pull Real ZKTeco Attendance Records with optional date range)
+  const handleSyncSingleDevice = useCallback(async (deviceId: number, dateRange?: { startDate?: string; endDate?: string }) => {
     const currentDevices = devicesRef.current;
     const currentWorkers = workersRef.current;
     const currentAttendance = attendanceRecordsRef.current;
@@ -471,7 +486,7 @@ export default function App() {
       prev.map((d) => (d.id === deviceId ? { ...d, status: 'syncing' } : d))
     );
 
-    const res = await pullDeviceAttendanceLogs(target.ip, target.port);
+    const res = await pullDeviceAttendanceLogs(target.ip, target.port, dateRange);
 
     if (res.success) {
       const pulledRecords: AttendanceRecord[] = res.records.map((r, i) => {
@@ -815,7 +830,7 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '5.5.0',
+      version: '5.6.0',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
@@ -899,21 +914,29 @@ export default function App() {
             {activeTab === 'dashboard' && (
               <DashboardHUD
                 workers={workers}
-                attendanceRecords={attendanceRecords}
+                attendanceRecords={processedAttendanceRecords}
                 devices={devices}
                 onNavigateToTab={(tab) => setActiveTab(tab)}
                 onSyncDevices={handleSyncAllDevices}
               />
             )}
 
-
+            {activeTab === 'summary' && (
+              <DailySummary
+                workers={workers}
+                processedAttendanceRecords={processedAttendanceRecords}
+                gatePasses={gatePasses}
+                shifts={shifts}
+                settings={settings}
+              />
+            )}
 
             {activeTab === 'devices' && (
               <DeviceManager
                 devices={devices}
                 workers={workers}
-                onSyncDevice={handleSyncSingleDevice}
-                onSyncAllDevices={handleSyncAllDevices}
+                onSyncDevice={(id, dateRange) => handleSyncSingleDevice(id, dateRange)}
+                onSyncAllDevices={(dateRange) => handleSyncAllDevices(false, dateRange)}
                 onImportUsbLogs={handleImportUsbLogs}
                 onUpdateDevice={handleUpdateDevice}
                 onAddDevice={handleAddDevice}
@@ -1004,6 +1027,7 @@ export default function App() {
             {activeTab === 'logs' && (
               <AttendanceLogs
                 records={attendanceRecords}
+                processedAttendanceRecords={processedAttendanceRecords}
                 workers={workers}
                 devices={devices}
                 shifts={shifts}
@@ -1044,7 +1068,7 @@ export default function App() {
             {activeTab === 'reports' && (
               <ReportsCenter
                 workers={workers}
-                attendanceRecords={attendanceRecords}
+                attendanceRecords={processedAttendanceRecords}
                 shifts={shifts}
                 gatePasses={gatePasses}
                 devices={devices}

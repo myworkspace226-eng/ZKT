@@ -32,7 +32,8 @@ import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GateP
 import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
 
 interface AttendanceLogsProps {
-  records: AttendanceRecord[];
+  records?: AttendanceRecord[];
+  processedAttendanceRecords?: AttendanceRecord[];
   workers: Worker[];
   devices: Device[];
   shifts?: ShiftRule[];
@@ -50,7 +51,8 @@ interface AttendanceLogsProps {
 type DatePreset = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom';
 
 export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
-  records,
+  records = [],
+  processedAttendanceRecords,
   workers,
   devices,
   shifts = [],
@@ -71,7 +73,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
   // Ambiguous Punch Resolution Modal State (Point 4 & Bug 2)
   const [resolvingRecord, setResolvingRecord] = useState<AttendanceRecord | null>(null);
-  const [resolutionChoice, setResolutionChoice] = useState<'temporary_pass' | 'final_out' | 'late_in'>('temporary_pass');
+  const [resolutionChoice, setResolutionChoice] = useState<'temporary_pass' | 'final_out' | 'late_in' | 'duplicate'>('temporary_pass');
   const [expectedReturnTime, setExpectedReturnTime] = useState<string>('14:30');
   const [passReason, setPassReason] = useState<string>('تصريح شخصي معتمد');
 
@@ -130,22 +132,25 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
   // Smart Attendance Processing (Dynamic Cooldown, 1st & Last Punch, Shift Reactivity, 3-zone Single Punch)
   const { smartRecords, detectedDuplicatesCount, missedPunchesCount, ambiguousCount, missingInCount } = useMemo(() => {
-    const processed = processSmartAttendanceLogs(records, { 
-      shiftEndTime: settings?.standardShiftEnd || shiftEndTime,
-      bangladeshiShiftEnd: settings?.bangladeshiShiftEnd || '18:30',
-      earlyDepartureWindowMinutes: settings?.earlyDepartureWindowMinutes ?? 30,
-      duplicateWindowMinutes: settings?.duplicateWindowMinutes ?? 60,
-      overtimeGraceMinutes: settings?.overtimeGraceMinutes ?? 30,
-      overnightCutoffHour: settings?.overnightCutoffHour ?? 6,
-      workers,
-      workerMap,
-    });
+    const source = (processedAttendanceRecords && processedAttendanceRecords.length > 0)
+      ? processedAttendanceRecords
+      : processSmartAttendanceLogs(records, { 
+          shiftEndTime: settings?.standardShiftEnd || shiftEndTime,
+          bangladeshiShiftEnd: settings?.bangladeshiShiftEnd || '18:30',
+          earlyDepartureWindowMinutes: settings?.earlyDepartureWindowMinutes ?? 30,
+          duplicateWindowMinutes: settings?.duplicateWindowMinutes ?? 60,
+          overtimeGraceMinutes: settings?.overtimeGraceMinutes ?? 30,
+          overnightCutoffHour: settings?.overnightCutoffHour ?? 6,
+          workers,
+          workerMap,
+        });
+
     let dupCount = 0;
     let missedCount = 0;
     let ambigCount = 0;
     let missingCount = 0;
 
-    const enriched = processed.map((rec) => {
+    const enriched = source.map((rec) => {
       const worker = workerMap.get(rec.workerCode);
       const effectiveName = (worker && worker.name && !worker.name.startsWith('عامل كود #') && !worker.name.startsWith('عامل كود'))
         ? worker.name 
@@ -164,12 +169,11 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       };
     });
 
-    // Re-sort descending (newest records first) for the UI
+    // Re-sort descending (newest records first) using fast string comparison
     enriched.sort((a, b) => {
-      const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
-      const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
-      if (isNaN(tA) || isNaN(tB)) return (b.id || '').localeCompare(a.id || '');
-      return tB - tA;
+      const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
+      const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+      return keyB.localeCompare(keyA);
     });
 
     return { 
@@ -179,7 +183,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       ambiguousCount: ambigCount,
       missingInCount: missingCount
     };
-  }, [records, workerMap, settings, shiftEndTime, workers]);
+  }, [processedAttendanceRecords, records, workerMap, settings, shiftEndTime, workers]);
 
   // Filtered records by Date, Deduplication, Department, State, and Search
   const filteredRecords = useMemo(() => {
@@ -491,7 +495,38 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const curTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
     const curDate = new Date().toISOString().slice(0, 10);
 
-    if (resolutionChoice === 'temporary_pass') {
+    if (resolutionChoice === 'duplicate') {
+      const updated: AttendanceRecord = {
+        ...resolvingRecord,
+        isAmbiguousSinglePunch: false,
+        ambiguousResolution: 'duplicate',
+        isDuplicateIgnored: true,
+        isHROverride: true,
+        isMissedPunch: false,
+        missedPunchReason: undefined,
+        manualNote: 'تم تجاهل بصمة مكررة من HR',
+      };
+      onUpdateRecord(updated);
+
+      if (onAddAuditRecord) {
+        onAddAuditRecord({
+          id: `audit-${Date.now()}`,
+          timestamp: nowIso,
+          displayTime: curTime,
+          displayDate: curDate,
+          modifiedBy: 'مسؤول الموارد البشرية',
+          workerCode: resolvingRecord.workerCode,
+          workerName: workerName,
+          recordId: resolvingRecord.id,
+          recordDate: resolvingRecord.displayDate,
+          recordTime: resolvingRecord.displayTime,
+          actionType: 'RESOLVE_AMBIGUOUS_DUPLICATE',
+          oldValue: `بصمة في نافذة الغموض (${resolvingRecord.displayTime})`,
+          newValue: 'تم تجاهل بصمة مكررة من HR',
+          reason: 'تم تجاهل بصمة مكررة من HR لوجود بصمة حضور صباحية سابقة',
+        });
+      }
+    } else if (resolutionChoice === 'temporary_pass') {
       const passId = `pass-${Date.now()}`;
       const updated: AttendanceRecord = {
         ...resolvingRecord,
@@ -990,8 +1025,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   <th className="py-2.5 px-3 font-semibold">اسم العامل</th>
                   <th className="py-2.5 px-3 font-semibold">القسم</th>
                   <th className="py-2.5 px-3 font-semibold">التاريخ</th>
-                  <th className="py-2.5 px-3 font-semibold">الوقت</th>
-                  <th className="py-2.5 px-3 font-semibold text-center">نوع الحركة</th>
+                  <th className="py-2.5 px-3 font-semibold text-center text-emerald-400">حضور (Check-In)</th>
+                  <th className="py-2.5 px-3 font-semibold text-center text-blue-400">انصراف (Check-Out)</th>
                   <th className="py-2.5 px-3 font-semibold text-center">طريقة البصمة</th>
                   <th className="py-2.5 px-3 font-semibold">الماكينة</th>
                   <th className="py-2.5 px-3 font-semibold">ملاحظات</th>
@@ -1057,7 +1092,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                               <button
                                 onClick={() => {
                                   setResolvingRecord(record);
-                                  setResolutionChoice('temporary_pass');
+                                  setResolutionChoice(record.hasMorningIn ? 'duplicate' : 'temporary_pass');
                                   setExpectedReturnTime('14:30');
                                   setPassReason('تصريح شخصي معتمد');
                                 }}
@@ -1097,37 +1132,46 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                     <td className="py-2 px-3 text-slate-300 text-[11px]">
                       {record.displayDate}
                     </td>
-                    <td className="py-2 px-3 text-slate-200 font-bold text-xs">
-                      {record.displayTime}
-                    </td>
+
+                    {/* عمود حضور (Check-In) */}
                     <td className="py-2 px-3 text-center">
-                      <div className="flex flex-col items-center gap-1">
-                        {record.isAmbiguousSinglePunch ? (
-                          <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                            بانتظار قرار HR
+                      {record.resolvedState === 'IN' ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span className="text-xs font-bold text-emerald-400 font-mono bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-500/30">
+                            {record.displayTime}
                           </span>
-                        ) : (
-                          <>
-                            <span className={`text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block ${
-                              record.resolvedState === 'IN'
-                                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-                            }`}>
-                              {record.resolvedState === 'IN' ? 'حضور' : 'انصراف'}
+                          {(record.lateMinutes || 0) > 0 && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans font-bold" title={`تأخير: ${record.lateMinutes} دقيقة`}>
+                              +{record.lateMinutes} د تأخير
                             </span>
-                            {record.isEarlyDeparture && (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={record.earlyDepartureReason}>
-                                انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)
-                              </span>
-                            )}
-                            {record.isOvertime && (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-sans font-bold" title={`إضافي: ${record.overtimeHours} ساعة`}>
-                                +{record.overtimeHours} س إضافي
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-slate-600 font-mono text-sm font-bold">—</span>
+                      )}
+                    </td>
+
+                    {/* عمود انصراف (Check-Out) */}
+                    <td className="py-2 px-3 text-center">
+                      {record.resolvedState === 'OUT' ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span className="text-xs font-bold text-blue-400 font-mono bg-blue-950/40 px-2 py-0.5 rounded border border-blue-500/30">
+                            {record.displayTime}
+                          </span>
+                          {record.isEarlyDeparture && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={record.earlyDepartureReason}>
+                              انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)
+                            </span>
+                          )}
+                          {record.isOvertime && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-sans font-bold" title={`إضافي: ${record.overtimeHours} ساعة`}>
+                              +{record.overtimeHours} س إضافي
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-slate-600 font-mono text-sm font-bold">—</span>
+                      )}
                     </td>
                     <td className="py-2 px-3 text-center">
                       {record.punchType === 'FACE' ? (
@@ -1645,29 +1689,54 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 </div>
               </label>
 
-              {/* Bug 2 Fix: Option 3 (Late IN) */}
-              <label 
-                onClick={() => setResolutionChoice('late_in')}
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                  resolutionChoice === 'late_in' 
-                    ? 'bg-emerald-950/40 border-emerald-500 text-white' 
-                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="ambiguous_choice"
-                  checked={resolutionChoice === 'late_in'}
-                  onChange={() => setResolutionChoice('late_in')}
-                  className="mt-0.5 text-emerald-600 focus:ring-emerald-500"
-                />
-                <div className="space-y-1">
-                  <span className="font-bold text-sm block text-emerald-300">3. اعتماد كحضور متأخر (Late IN)</span>
-                  <span className="text-[11px] text-slate-400 block">
-                    اعتماد البصمة كـ حضور (IN)، ويحسب النظام التأخير آلياً من موعد بداية الوردية ({settings?.standardShiftStart || '08:00'} صباحاً) حتى وقت البصمة ({resolvingRecord.displayTime}).
-                  </span>
-                </div>
-              </label>
+              {/* Task 2: If worker has a morning IN punch, replace Late IN with Duplicate Option */}
+              {resolvingRecord.hasMorningIn ? (
+                <label 
+                  onClick={() => setResolutionChoice('duplicate')}
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    resolutionChoice === 'duplicate' 
+                      ? 'bg-rose-950/40 border-rose-500 text-white' 
+                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="ambiguous_choice"
+                    checked={resolutionChoice === 'duplicate'}
+                    onChange={() => setResolutionChoice('duplicate')}
+                    className="mt-0.5 text-rose-500 focus:ring-rose-500"
+                  />
+                  <div className="space-y-1">
+                    <span className="font-bold text-sm block text-rose-300">3. بصمة مكررة / إضافية (Duplicate)</span>
+                    <span className="text-[11px] text-slate-400 block">
+                      تم رصد بصمة حضور صباحية سابقة لنفس العامل اليوم، سيتم استبعاد هذه البصمة كبصمة مكررة/إضافية مع الحفاظ عليها في السجل.
+                    </span>
+                  </div>
+                </label>
+              ) : (
+                <label 
+                  onClick={() => setResolutionChoice('late_in')}
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    resolutionChoice === 'late_in' 
+                      ? 'bg-emerald-950/40 border-emerald-500 text-white' 
+                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="ambiguous_choice"
+                    checked={resolutionChoice === 'late_in'}
+                    onChange={() => setResolutionChoice('late_in')}
+                    className="mt-0.5 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <div className="space-y-1">
+                    <span className="font-bold text-sm block text-emerald-300">3. اعتماد كحضور متأخر (Late IN)</span>
+                    <span className="text-[11px] text-slate-400 block">
+                      اعتماد البصمة كـ حضور (IN)، ويحسب النظام التأخير آلياً من موعد بداية الوردية ({settings?.standardShiftStart || '08:00'} صباحاً) حتى وقت البصمة ({resolvingRecord.displayTime}).
+                    </span>
+                  </div>
+                </label>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 text-xs">

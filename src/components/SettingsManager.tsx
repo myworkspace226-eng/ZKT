@@ -81,7 +81,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div>
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>إعدادات النظام ومواعيد العمل</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">V 5.5.0</span>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">V 5.6.0</span>
             </h2>
             <p className="text-[11px] text-slate-400">
               تخصيص هوية المصنع، مواعيد الورديات وفترات السماح والانصراف المبكر، والنسخ الاحتياطي

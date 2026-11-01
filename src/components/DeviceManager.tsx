@@ -21,7 +21,9 @@ import {
   DatabaseZap,
   RotateCcw,
   Unplug,
-  Power
+  Power,
+  Calendar,
+  Filter
 } from 'lucide-react';
 import { Device, Worker } from '../types';
 import { 
@@ -33,11 +35,13 @@ import {
   clearDeviceAttendanceLog
 } from '../services/deviceConnection';
 
+export type PullDatePreset = 'today' | 'yesterday' | 'week' | 'month' | 'all' | 'custom';
+
 interface DeviceManagerProps {
   devices: Device[];
   workers?: Worker[];
-  onSyncDevice: (deviceId: number) => void;
-  onSyncAllDevices: () => void;
+  onSyncDevice: (deviceId: number, dateRange?: { startDate?: string; endDate?: string }) => void;
+  onSyncAllDevices: (dateRange?: { startDate?: string; endDate?: string }) => void;
   onImportUsbLogs: (fileContent: string) => void;
   onUpdateDevice: (device: Device) => void;
   onAddDevice: (device: Device) => void;
@@ -46,7 +50,7 @@ interface DeviceManagerProps {
   onResetMockData?: () => void;
 }
 
-export const DeviceManager: React.FC<DeviceManagerProps> = ({
+const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
   devices,
   workers = [],
   onSyncDevice,
@@ -63,6 +67,46 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
   const [usbContent, setUsbContent] = useState<string>('');
   const [notification, setNotification] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
   const [overrideUploadFilter, setOverrideUploadFilter] = useState<boolean>(false);
+
+  // Task 3: Date Range Filter for pulling device attendance logs
+  const [pullPreset, setPullPreset] = useState<PullDatePreset>('today');
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const [customPullStart, setCustomPullStart] = useState<string>(todayISO);
+  const [customPullEnd, setCustomPullEnd] = useState<string>(todayISO);
+
+  const getEffectiveDateRange = (): { startDate?: string; endDate?: string } | undefined => {
+    const today = new Date();
+    const toISO = (d: Date) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    if (pullPreset === 'today') {
+      const t = toISO(today);
+      return { startDate: t, endDate: t };
+    }
+    if (pullPreset === 'yesterday') {
+      const y = new Date(today);
+      y.setDate(y.getDate() - 1);
+      const yStr = toISO(y);
+      return { startDate: yStr, endDate: yStr };
+    }
+    if (pullPreset === 'week') {
+      const w = new Date(today);
+      w.setDate(w.getDate() - 7);
+      return { startDate: toISO(w), endDate: toISO(today) };
+    }
+    if (pullPreset === 'month') {
+      const m = new Date(today.getFullYear(), today.getMonth(), 1);
+      return { startDate: toISO(m), endDate: toISO(today) };
+    }
+    if (pullPreset === 'custom') {
+      return { startDate: customPullStart, endDate: customPullEnd };
+    }
+    return undefined; // 'all'
+  };
 
   // Modal State for Add / Edit
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -539,12 +583,69 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
           )}
 
           <button
-            onClick={onSyncAllDevices}
+            onClick={() => onSyncAllDevices(getEffectiveDateRange())}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>سحب متزامن للكل</span>
           </button>
+        </div>
+      </div>
+
+      {/* Task 3: Date Range Filter Toolbar for Pulling Attendance Logs */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-3 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs font-bold text-white">نطاق سحب الحركات من الماكينات (فلترة مسبقة من السوكت لتخفيف الحمل والسرعة):</span>
+          </div>
+          <span className="text-[11px] text-slate-400 font-mono">
+            {pullPreset === 'all' 
+              ? 'سحب جميع السجلات المخزنة بالماكينة' 
+              : `الفترة النشطة: ${getEffectiveDateRange()?.startDate || ''} إلى ${getEffectiveDateRange()?.endDate || ''}`}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          {[
+            { id: 'today', label: 'اليوم' },
+            { id: 'yesterday', label: 'أمس' },
+            { id: 'week', label: 'آخر 7 أيام' },
+            { id: 'month', label: 'الشهر الحالي' },
+            { id: 'all', label: 'الكل (غير مقيد)' },
+            { id: 'custom', label: 'تاريخ مخصص' },
+          ].map((preset) => (
+            <button
+              key={preset.id}
+              onClick={() => setPullPreset(preset.id as PullDatePreset)}
+              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
+                pullPreset === preset.id
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700/60'
+              }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+
+          {pullPreset === 'custom' && (
+            <div className="flex items-center gap-2 mr-2">
+              <span className="text-slate-400 text-xs">من:</span>
+              <input
+                type="date"
+                value={customPullStart}
+                onChange={(e) => setCustomPullStart(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-xs text-white font-mono"
+              />
+              <span className="text-slate-400 text-xs">إلى:</span>
+              <input
+                type="date"
+                value={customPullEnd}
+                onChange={(e) => setCustomPullEnd(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-xs text-white font-mono"
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -666,7 +767,7 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
                   )}
 
                   <button
-                    onClick={() => onSyncDevice(device.id)}
+                    onClick={() => onSyncDevice(device.id, getEffectiveDateRange())}
                     className="w-full py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/80 transition-colors cursor-pointer text-[11px] flex items-center justify-center gap-1.5 font-medium"
                     title="سحب الحركات"
                   >
@@ -1150,3 +1251,5 @@ export const DeviceManager: React.FC<DeviceManagerProps> = ({
     </div>
   );
 };
+
+export const DeviceManager = React.memo(DeviceManagerComponent);

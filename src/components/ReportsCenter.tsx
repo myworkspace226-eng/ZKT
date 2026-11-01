@@ -872,7 +872,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>مركز التقارير المتقدمة وتحليلات الحضور</span>
               <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">
-                V 5.5.0
+                V 5.6.0
               </span>
             </h2>
             <p className="text-[11px] text-slate-400">

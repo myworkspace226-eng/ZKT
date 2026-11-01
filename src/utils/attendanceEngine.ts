@@ -152,12 +152,11 @@ export function processSmartAttendanceLogs(
     const [endH, endM] = effectiveShiftEndStr.split(':').map((v) => parseInt(v, 10) || 0);
     const shiftEndTotalMinutes = endH * 60 + endM;
 
-    // 1. Sort all punches for this worker chronologically
+    // 1. Sort all punches for this worker chronologically (Fast string comparison)
     workerRecords.sort((a, b) => {
-      const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
-      const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
-      if (isNaN(tA) || isNaN(tB)) return (a.id || '').localeCompare(b.id || '');
-      return tA - tB;
+      const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
+      const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+      return keyA.localeCompare(keyB);
     });
 
     // 2. Work Day Assignment (06:00 cutoff: punches between 00:00 and 05:59 belong to previous work day)
@@ -186,10 +185,22 @@ export function processSmartAttendanceLogs(
     // 3. Process each work day independently
     dayPunchesMap.forEach((punchesOnDay, workDay) => {
       punchesOnDay.sort((a, b) => {
-        const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
-        const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
-        return tA - tB;
+        const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
+        const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+        return keyA.localeCompare(keyB);
       });
+
+      // Task 2: Determine if this worker already has a morning IN punch on this work day (06:00 - 11:59)
+      const hasMorningInPunch = punchesOnDay.some((p) => {
+        if (p.isDuplicateIgnored) return false;
+        const [hStr, mStr] = (p.displayTime || '08:00').split(':');
+        const mins = (parseInt(hStr, 10) || 0) * 60 + (parseInt(mStr, 10) || 0);
+        return (mins >= 360 && mins < 720) || (p.isManual && p.resolvedState === 'IN' && mins < 720);
+      });
+
+      for (const p of punchesOnDay) {
+        p.hasMorningIn = hasMorningInPunch;
+      }
 
       // Deduplication using Cooldown with Permission Return Exception (Point 2 & Point 4)
       const acceptedPunches: AttendanceRecord[] = [];
@@ -530,12 +541,11 @@ export function processSmartAttendanceLogs(
     });
   });
 
-  // Sort overall descending by date/time
+  // Sort overall descending by date/time (Fast string comparison)
   processedAll.sort((a, b) => {
-    const tA = new Date(`${a.displayDate}T${a.displayTime}:00`).getTime();
-    const tB = new Date(`${b.displayDate}T${b.displayTime}:00`).getTime();
-    if (isNaN(tA) || isNaN(tB)) return (b.id || '').localeCompare(a.id || '');
-    return tB - tA;
+    const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
+    const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+    return keyB.localeCompare(keyA);
   });
 
   return processedAll;

@@ -159,7 +159,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 5.5.0)',
+    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 5.6.0)',
     icon: iconPath,
     webPreferences: {
       nodeIntegration: true,
@@ -297,7 +297,7 @@ safeHandle('zkt-ping-device', async (event, { ip, port = 4370, timeout = 2500 })
  * 2. Pull Real Attendance Logs from ZKTeco Device
  * Connects directly using binary protocol on port 4370 (TCP/UDP)
  */
-safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) => {
+safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000, startDate, endDate }) => {
   let zk = null;
   const startTime = Date.now();
   try {
@@ -322,8 +322,28 @@ safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) =
       await zk.disconnect();
     } catch {}
 
-    const rawRecords = (attendances && attendances.data) ? attendances.data : [];
+    let rawRecords = (attendances && attendances.data) ? attendances.data : [];
+
+    // Task 3: Filter records by date range at hardware boundary to drastically reduce payload and rendering load
+    if (startDate || endDate) {
+      rawRecords = rawRecords.filter((r) => {
+        let recDateStr = '';
+        if (r.record_time instanceof Date) {
+          recDateStr = r.record_time.toISOString().slice(0, 10);
+        } else if (typeof r.record_time === 'string') {
+          recDateStr = r.record_time.slice(0, 10).replace(/\//g, '-');
+        }
+        if (!recDateStr) return true;
+        if (startDate && recDateStr < startDate) return false;
+        if (endDate && recDateStr > endDate) return false;
+        return true;
+      });
+    }
+
     const pingMs = Math.max(1, Date.now() - startTime);
+    const periodMsg = (startDate || endDate)
+      ? ` للفترة (${startDate || 'البداية'} إلى ${endDate || 'الآن'})`
+      : '';
 
     return {
       success: true,
@@ -349,7 +369,7 @@ safeHandle('zkt-pull-logs', async (event, { ip, port = 4370, timeout = 5000 }) =
         };
       }),
       deviceInfo: info || null,
-      message: `تم سحب ${rawRecords.length} حركة بنجاح من الماكينة (${ip})`,
+      message: `تم سحب ${rawRecords.length} حركة بنجاح من الماكينة (${ip})${periodMsg}`,
     };
   } catch (err) {
     if (zk) {
