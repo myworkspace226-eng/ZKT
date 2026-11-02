@@ -146,8 +146,9 @@ export function processSmartAttendanceLogs(
   workerGroups.forEach((workerRecords, workerCode) => {
     // Determine worker specific shift
     const workerObj = workerLookup?.get(workerCode);
+    const workerShift = options?.shifts?.find((s) => s.id === workerObj?.shiftId) || options?.shifts?.[0];
     const isBengali = workerObj?.nationality === 'بنغلاديشي' || workerObj?.shiftId === 'bangladeshi';
-    const effectiveShiftEndStr = isBengali ? bangladeshiShiftEndStr : defaultShiftEndStr;
+    const effectiveShiftEndStr = isBengali ? bangladeshiShiftEndStr : (workerShift?.endTime || defaultShiftEndStr);
 
     const [endH, endM] = effectiveShiftEndStr.split(':').map((v) => parseInt(v, 10) || 0);
     const shiftEndTotalMinutes = endH * 60 + endM;
@@ -242,33 +243,10 @@ export function processSmartAttendanceLogs(
       const isToday = workDay === todayStr;
       const isPastShiftEnd = isToday ? nowTotalMinutes >= shiftEndTotalMinutes : true;
 
-      const punchDate = new Date(`${workDay}T12:00:00`);
-      const isFriday = punchDate.getDay() === 5;
-      const workerShift = workerObj ? options?.shifts?.find((s) => s.id === workerObj.shiftId) : null;
-      const effectiveFridayMultiplier = workerShift?.fridayMultiplier ?? options?.fridayMultiplier ?? 2.0;
-
-      if (isFriday) {
-        for (const p of acceptedPunches) {
-          p.isFridayDouble = true;
-          p.fridayMultiplier = effectiveFridayMultiplier;
-        }
-      }
-
-      // Helper for Overtime on departure punches (Point 6: Factory Logic)
+      // Helper for Overtime on departure punches (Standard factory logic for all days)
       const evaluateOvertime = (punch: AttendanceRecord, punchMinutes: number) => {
-        if (isFriday) {
-          punch.isFridayDouble = true;
-          punch.fridayMultiplier = effectiveFridayMultiplier;
-        }
-
         if (punch.isHROverride && punch.overtimeHours !== undefined) {
           punch.isOvertime = punch.overtimeHours > 0;
-          return;
-        }
-
-        if (isFriday) {
-          punch.isOvertime = true;
-          punch.overtimeHours = 8 * effectiveFridayMultiplier;
           return;
         }
 
@@ -628,22 +606,14 @@ export function calculateDailyPerformance(
       minutesPastShiftEnd += 1440;
     }
 
-    if (isFriday) {
-      // Friday 2x rule: Basic is 16 hours
-      workHours = 8 * shift.fridayMultiplier;
-      overtimeHours = Math.max(0, netHours - 8) * shift.fridayMultiplier;
-    } else {
-      workHours = Math.min(netHours, standardShiftHours);
+    workHours = Math.min(netHours, standardShiftHours);
 
-      // Point 13: Factory Departure Grace Logic
-      // If worker punches out within departureGraceMinutes (e.g. 16:30 - 16:45), this is normal departure queue -> 0 overtime
-      if (minutesPastShiftEnd > departureGraceMinutes) {
-        // Legitimate overtime beyond departure queue window
-        const otHours = minutesPastShiftEnd / 60;
-        overtimeHours = Number(otHours.toFixed(2));
-      } else {
-        overtimeHours = 0;
-      }
+    // Factory Departure Grace Logic: overtime counted past grace window
+    if (minutesPastShiftEnd > departureGraceMinutes) {
+      const otHours = minutesPastShiftEnd / 60;
+      overtimeHours = Number(otHours.toFixed(2));
+    } else {
+      overtimeHours = 0;
     }
   } else {
     // Punched in but hasn't punched out yet
@@ -880,11 +850,11 @@ export async function exportProfessionalAbsenceExcel(
   worksheet.mergeCells('A1:I1');
   const titleCell = worksheet.getCell('A1');
   titleCell.value = `${info.factoryName || 'إدارة المصنع'} — تقرير الغياب اليومي (${info.reportDate})`;
-  titleCell.font = { name: 'Segoe UI', size: 15, bold: true, color: { argb: 'FFFFFFFF' } };
+  titleCell.font = { name: 'Segoe UI', size: 15, bold: true, color: { argb: 'FF8B0000' } };
   titleCell.fill = {
     type: 'pattern',
     pattern: 'solid',
-    fgColor: { argb: 'FF1E293B' }, // Dark slate
+    fgColor: { argb: 'FFFFF8DC' }, // Creamy
   };
   titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
   worksheet.getRow(1).height = 36;

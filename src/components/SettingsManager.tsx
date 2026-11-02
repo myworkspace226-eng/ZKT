@@ -81,7 +81,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div>
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>إعدادات النظام ومواعيد العمل</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">V 5.6.1</span>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">V 5.6.2</span>
             </h2>
             <p className="text-[11px] text-slate-400">
               تخصيص هوية المصنع، مواعيد الورديات وفترات السماح والانصراف المبكر، والنسخ الاحتياطي
@@ -345,7 +345,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">رقم إصدار البرنامج</span>
-              <span className="font-bold text-emerald-400 font-mono text-sm">V 5.5.0</span>
+              <span className="font-bold text-emerald-400 font-mono text-sm">V 5.6.2</span>
             </div>
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
               <span className="text-[11px] text-slate-400 block mb-1">نمط العمل والاتصال</span>

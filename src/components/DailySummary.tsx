@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Worker, AttendanceRecord, GatePass, ShiftRule, FactorySettings } from '../types';
 import { calculateDailyPerformance, exportToExcel, formatHoursAndMinutes } from '../utils/attendanceEngine';
+import { CustomDatePicker } from './CustomDatePicker';
 
 interface DailySummaryProps {
   workers: Worker[];
@@ -120,7 +121,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           inPunch,
           outPunch,
           workerShift,
-          isFriday,
+          false,
           settings?.overtimeGraceMinutes ?? 30
         );
 
@@ -243,25 +244,21 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <span>لوحة ملخص اليوم</span>
+              <span>ملخص اليوم</span>
             </h2>
             <span className="text-xs px-2 py-0.5 rounded bg-blue-600/20 text-blue-400 font-mono border border-blue-500/30">
-              V 5.6.1
+              V 5.6.2
             </span>
           </div>
         </div>
 
         {/* Date Selector Controls */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 bg-slate-950 border border-slate-700 rounded-lg p-1">
-            <Calendar className="w-4 h-4 text-emerald-400 mr-1" />
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-transparent text-xs text-white font-mono focus:outline-hidden cursor-pointer"
-            />
-          </div>
+          <CustomDatePicker
+            value={selectedDate}
+            onChange={(d) => d && setSelectedDate(d)}
+            placeholder="اختر التاريخ..."
+          />
 
           <div className="flex items-center gap-1">
             <button
@@ -297,17 +294,6 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           </button>
         </div>
       </div>
-
-      {/* Friday Notification Banner */}
-      {summaryData.isFriday && (
-        <div className="bg-amber-950/40 border border-amber-500/40 rounded-lg p-3 text-xs text-amber-200 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>يوم الجمعة (عطلة رسمية): يتم احتساب ساعات الحضور بمعدل مضاعف 2.0x (16 ساعة أساسي + إضافي مضاعف).</span>
-          </div>
-          <span className="font-mono font-bold text-amber-300 px-2 py-0.5 rounded bg-amber-500/20">الجمعة 2x</span>
-        </div>
-      )}
 
       {/* 7 Colorful High-Performance KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">

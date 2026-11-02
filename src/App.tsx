@@ -190,7 +190,7 @@ export default function App() {
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 5.6.1', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 5.6.2', 
       type: 'info' 
     }
   ]);
@@ -834,7 +834,7 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '5.6.1',
+      version: '5.6.2',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,

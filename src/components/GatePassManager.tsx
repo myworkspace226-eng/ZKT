@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { GatePass, Worker } from '../types';
 import { exportToExcel } from '../utils/attendanceEngine';
+import { CustomDatePicker } from './CustomDatePicker';
 
 interface GatePassManagerProps {
   gatePasses: GatePass[];
@@ -289,11 +290,10 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
             >
               اليوم
             </button>
-            <input
-              type="date"
+            <CustomDatePicker
               value={dateFilter === 'all' || dateFilter === 'today' ? '' : dateFilter}
-              onChange={(e) => setDateFilter(e.target.value || 'all')}
-              className="bg-slate-900 border border-slate-700 rounded px-2 py-0.5 text-xs text-white cursor-pointer font-mono"
+              onChange={(d) => setDateFilter(d || 'all')}
+              placeholder="تاريخ محدد..."
             />
           </div>
 
@@ -484,12 +484,10 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
                     <Calendar className="w-3.5 h-3.5 text-blue-400" />
                     <span>تاريخ التصريح</span>
                   </label>
-                  <input
-                    type="date"
+                  <CustomDatePicker
                     value={passDate}
-                    onChange={(e) => setPassDate(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
-                    required
+                    onChange={(d) => d && setPassDate(d)}
+                    className="w-full"
                   />
                 </div>
 
@@ -796,12 +794,10 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
                     <Calendar className="w-3.5 h-3.5 text-blue-400" />
                     <span>تاريخ التصريح</span>
                   </label>
-                  <input
-                    type="date"
+                  <CustomDatePicker
                     value={editDate}
-                    onChange={(e) => setEditDate(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono focus:border-blue-500"
-                    required
+                    onChange={(d) => d && setEditDate(d)}
+                    className="w-full"
                   />
                 </div>
 

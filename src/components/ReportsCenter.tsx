@@ -35,6 +35,7 @@ import {
   calculateDailyPerformance,
   formatHoursAndMinutes 
 } from '../utils/attendanceEngine';
+import { CustomDatePicker } from './CustomDatePicker';
 
 const ARABIC_WEEKDAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
@@ -603,9 +604,10 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     });
   }, [attendanceRecords, startDate, endDate]);
 
-  // Filtered workers by department, nationality, machine
+  // Filtered workers by department, nationality, machine (Only active workers)
   const filteredOtWorkers = useMemo(() => {
     return workers.filter((w) => {
+      if (w.isActive !== true) return false;
       if (otDepartmentFilter !== 'all' && w.department !== otDepartmentFilter) return false;
       if (otNationalityFilter !== 'all' && w.nationality !== otNationalityFilter) return false;
       if (otDeviceFilter !== 'all') {
@@ -699,14 +701,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           let statusLabel = 'انصراف اعتيادي';
           let minutesPast = 0;
 
-          if (isFriday) {
-            const workerShift = shifts.find((s) => s.id === w.shiftId) || shifts[0];
-            const fridayMult = workerShift?.fridayMultiplier || 2;
-            dayOtHours = 8 * fridayMult;
-            fridayOt += dayOtHours;
-            otDays++;
-            statusLabel = `عمل يوم الجمعة (مضاعف ${fridayMult}x - ${dayOtHours} ساعة)`;
-          } else if (checkOut) {
+          if (checkOut) {
             const outDate = new Date(checkOut.timestamp);
             const outMinutes = outDate.getHours() * 60 + outDate.getMinutes();
             minutesPast = outMinutes - scheduledEndMinutes;
@@ -845,6 +840,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     return Object.keys(lateByWorker).map((codeStr) => {
       const code = parseInt(codeStr, 10);
       const worker = workers.find((w) => w.code === code);
+      if (!worker || worker.isActive === false) return null;
       const stat = lateByWorker[code];
       const avg = stat.count > 0 ? Math.round(stat.totalMinutes / stat.count) : 0;
       const customGrace = worker?.customGraceMinutes || 0;
@@ -857,7 +853,9 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         avgMinutesPerDay: avg,
         customGrace: customGrace > 0 ? `سماحية ${customGrace}د` : 'سماحية عامة',
       };
-    }).sort((a, b) => b.totalLateMinutes - a.totalLateMinutes);
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => b.totalLateMinutes - a.totalLateMinutes);
   }, [recordsInDateRange, workers]);
 
   return (
@@ -870,13 +868,13 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           </div>
           <div>
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
-              <span>مركز التقارير المتقدمة وتحليلات الحضور</span>
+              <span>مركز التقارير وتحليلات الحضور</span>
               <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">
-                V 5.6.1
+                V 5.6.2
               </span>
             </h2>
             <p className="text-[11px] text-slate-400">
-              تقارير الغياب اليومي، الملف الشامل للعامل، وحساب الساعات الإضافية المتقدم
+              تقارير الغياب اليومي، وسجل الحضور والغياب، والساعات الإضافية
             </p>
           </div>
         </div>
@@ -885,13 +883,11 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {activeReportTab === 'daily_manager' ? (
             <div className="flex items-center gap-2 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-800">
-              <Calendar className="w-3.5 h-3.5 text-blue-400" />
               <span className="text-slate-300 font-medium">تاريخ تقرير اليوم:</span>
-              <input
-                type="date"
+              <CustomDatePicker
                 value={selectedDay}
-                onChange={(e) => setSelectedDay(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded px-2 py-0.5 text-xs text-white font-mono cursor-pointer focus:border-blue-500"
+                onChange={(d) => d && setSelectedDay(d)}
+                placeholder="تاريخ التقرير..."
               />
             </div>
           ) : (
@@ -932,24 +928,26 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
               </div>
 
               <div className="flex items-center gap-1.5 font-mono text-xs">
-                <input
-                  type="date"
+                <CustomDatePicker
                   value={startDate}
-                  onChange={(e) => {
-                    setStartDate(e.target.value);
-                    setQuickPreset('custom');
+                  onChange={(d) => {
+                    if (d) {
+                      setStartDate(d);
+                      setQuickPreset('custom');
+                    }
                   }}
-                  className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white cursor-pointer"
+                  placeholder="من تاريخ..."
                 />
                 <span className="text-slate-400 text-[11px]">إلى:</span>
-                <input
-                  type="date"
+                <CustomDatePicker
                   value={endDate}
-                  onChange={(e) => {
-                    setEndDate(e.target.value);
-                    setQuickPreset('custom');
+                  onChange={(d) => {
+                    if (d) {
+                      setEndDate(d);
+                      setQuickPreset('custom');
+                    }
                   }}
-                  className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white cursor-pointer"
+                  placeholder="إلى تاريخ..."
                 />
               </div>
             </div>
@@ -1542,14 +1540,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                 <Timer className="w-5 h-5 text-amber-400" />
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <span>محرك حساب الساعات الإضافية المتقدم (Overtime Engine)</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono">
-                      معادلة المصنع
-                    </span>
+                    <span>تقرير الساعات الإضافية</span>
                   </h3>
-                  <p className="text-[11px] text-slate-400">
-                    استخراج الإضافي بدقة بعد الـ 4:30، مع استثناء فترة سماح الخروج الطبيعي (4:45)، وحساب إضافي السهر والجمعة
-                  </p>
                 </div>
               </div>
 

@@ -159,7 +159,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 5.6.1)',
+    title: 'نظام إدارة ماكينات البصمة والحضور | المطور: Muhammad Abdullah (V 5.6.2)',
     icon: iconPath,
     webPreferences: {
       nodeIntegration: true,

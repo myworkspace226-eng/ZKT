@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { CustomDatePicker } from './CustomDatePicker';
 import { 
   HardDrive, 
   Wifi, 
@@ -69,6 +70,52 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
   const [usbContent, setUsbContent] = useState<string>('');
   const [notification, setNotification] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
   const [overrideUploadFilter, setOverrideUploadFilter] = useState<boolean>(false);
+
+  // Task 5: Auto-Heartbeat connection state checker (runs every 15s when active)
+  const [autoHeartbeat, setAutoHeartbeat] = useState<boolean>(false);
+  const devicesRef = useRef(devices);
+  useEffect(() => {
+    devicesRef.current = devices;
+  }, [devices]);
+
+  useEffect(() => {
+    if (!autoHeartbeat || !isDesktopApp()) return;
+
+    const timer = setInterval(async () => {
+      const currentDevices = devicesRef.current;
+      const connectedDevices = currentDevices.filter((d) => d.status === 'connected');
+      if (connectedDevices.length === 0) return;
+
+      const pingResults = await Promise.all(
+        connectedDevices.map(async (d) => {
+          const res = await pingDeviceNetwork(d.ip, d.port);
+          return { deviceId: d.id, online: res.success, pingMs: res.pingMs };
+        })
+      );
+
+      // Only update if there is a real status change
+      for (const res of pingResults) {
+        const latestDevice = devicesRef.current.find((d) => d.id === res.deviceId);
+        if (!latestDevice) continue;
+
+        if (latestDevice.status === 'connected' && !res.online) {
+          onUpdateDevice({
+            ...latestDevice,
+            status: 'disconnected',
+            pingMs: undefined,
+          });
+        } else if (res.online && res.pingMs && res.pingMs !== latestDevice.pingMs) {
+          onUpdateDevice({
+            ...latestDevice,
+            status: 'connected',
+            pingMs: res.pingMs,
+          });
+        }
+      }
+    }, 15000);
+
+    return () => clearInterval(timer);
+  }, [autoHeartbeat, onUpdateDevice]);
 
   // Task 3: Date Range Filter for pulling device attendance logs
   const [pullPreset, setPullPreset] = useState<PullDatePreset>('today');
@@ -584,6 +631,20 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
             </button>
           )}
 
+          {/* Task 5: Auto-Heartbeat Toggle */}
+          <button
+            onClick={() => setAutoHeartbeat(!autoHeartbeat)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+              autoHeartbeat 
+                ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300' 
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+            }`}
+            title="فحص دوري لحالة الأجهزة كل 15 ثانية وتحديث حالة الاتصال تلقائياً"
+          >
+            <Activity className={`w-3.5 h-3.5 ${autoHeartbeat ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
+            <span>تحديث حالة الاتصال التلقائي {autoHeartbeat ? '(نشط)' : ''}</span>
+          </button>
+
           <button
             onClick={() => onSyncAllDevices(getEffectiveDateRange())}
             disabled={isSyncing}
@@ -636,18 +697,16 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
           {pullPreset === 'custom' && (
             <div className="flex items-center gap-2 mr-2">
               <span className="text-slate-400 text-xs">من:</span>
-              <input
-                type="date"
+              <CustomDatePicker
                 value={customPullStart}
-                onChange={(e) => setCustomPullStart(e.target.value)}
-                className="bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-xs text-white font-mono"
+                onChange={(d) => d && setCustomPullStart(d)}
+                placeholder="من تاريخ..."
               />
               <span className="text-slate-400 text-xs">إلى:</span>
-              <input
-                type="date"
+              <CustomDatePicker
                 value={customPullEnd}
-                onChange={(e) => setCustomPullEnd(e.target.value)}
-                className="bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-xs text-white font-mono"
+                onChange={(d) => d && setCustomPullEnd(d)}
+                placeholder="إلى تاريخ..."
               />
             </div>
           )}

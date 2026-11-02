@@ -30,6 +30,35 @@ import {
 } from 'lucide-react';
 import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GatePass, PunchType, ShiftRule } from '../types';
 import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
+import { CustomDatePicker } from './CustomDatePicker';
+
+export interface GroupedAttendanceRow {
+  rowKey: string;
+  workerCode: number;
+  workerName: string;
+  department: string;
+  displayDate: string;
+  checkInRecord?: AttendanceRecord;
+  checkOutRecord?: AttendanceRecord;
+  allPunches: AttendanceRecord[];
+  hasMissingIn: boolean;
+  missingInRecord?: AttendanceRecord;
+  hasAmbiguous: boolean;
+  ambiguousRecord?: AttendanceRecord;
+  hasPassReturn: boolean;
+  hasTemporaryPass: boolean;
+  hasMissedPunch: boolean;
+  missedPunchReason?: string;
+  isDuplicateIgnored: boolean;
+  isHROverride: boolean;
+  lateMinutes?: number;
+  overtimeHours?: number;
+  isEarlyDeparture?: boolean;
+  earlyDepartureMinutes?: number;
+  deviceNames: string[];
+  punchTypes: PunchType[];
+  notes: string[];
+}
 
 interface AttendanceLogsProps {
   records?: AttendanceRecord[];
@@ -99,6 +128,12 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   const [editOvertimeHours, setEditOvertimeHours] = useState<number>(0);
   const [editNote, setEditNote] = useState<string>('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  
+  // Multi-punch selection modal for consolidated daily rows (Task 9)
+  const [multiPunchModal, setMultiPunchModal] = useState<{
+    mode: 'edit' | 'delete';
+    row: GroupedAttendanceRow;
+  } | null>(null);
   
   // Date Filtering State
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
@@ -252,13 +287,101 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     return Array.from(set).filter(Boolean);
   }, [workers, records]);
 
-  // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / pageSize));
+  // Daily Consolidated Attendance Rows (Task 9)
+  const groupedRows: GroupedAttendanceRow[] = useMemo(() => {
+    const map = new Map<string, GroupedAttendanceRow>();
+
+    filteredRecords.forEach((rec) => {
+      const key = `${rec.workerCode}_${rec.displayDate}`;
+      let row = map.get(key);
+      if (!row) {
+        row = {
+          rowKey: key,
+          workerCode: rec.workerCode,
+          workerName: rec.workerName,
+          department: rec.department,
+          displayDate: rec.displayDate,
+          allPunches: [],
+          hasMissingIn: false,
+          hasAmbiguous: false,
+          hasPassReturn: false,
+          hasTemporaryPass: false,
+          hasMissedPunch: false,
+          isDuplicateIgnored: false,
+          isHROverride: false,
+          deviceNames: [],
+          punchTypes: [],
+          notes: [],
+        };
+        map.set(key, row);
+      }
+
+      row.allPunches.push(rec);
+
+      if (rec.resolvedState === 'IN') {
+        if (!row.checkInRecord || rec.displayTime < row.checkInRecord.displayTime) {
+          row.checkInRecord = rec;
+        }
+        if (rec.lateMinutes && (!row.lateMinutes || rec.lateMinutes > row.lateMinutes)) {
+          row.lateMinutes = rec.lateMinutes;
+        }
+      } else if (rec.resolvedState === 'OUT') {
+        if (!row.checkOutRecord || rec.displayTime > row.checkOutRecord.displayTime) {
+          row.checkOutRecord = rec;
+        }
+        if (rec.overtimeHours && (!row.overtimeHours || rec.overtimeHours > row.overtimeHours)) {
+          row.overtimeHours = rec.overtimeHours;
+        }
+        if (rec.isEarlyDeparture) {
+          row.isEarlyDeparture = true;
+          row.earlyDepartureMinutes = rec.earlyDepartureMinutes;
+        }
+      }
+
+      if (rec.missingInPunch) {
+        row.hasMissingIn = true;
+        row.missingInRecord = rec;
+      }
+      if (rec.isAmbiguousSinglePunch) {
+        row.hasAmbiguous = true;
+        row.ambiguousRecord = rec;
+      }
+      if (rec.isReturnFromPass) row.hasPassReturn = true;
+      if (rec.ambiguousResolution === 'temporary_pass') row.hasTemporaryPass = true;
+      if (rec.isMissedPunch) {
+        row.hasMissedPunch = true;
+        row.missedPunchReason = rec.missedPunchReason;
+      }
+      if (rec.isDuplicateIgnored) row.isDuplicateIgnored = true;
+      if (rec.isHROverride || rec.isManual) row.isHROverride = true;
+
+      if (rec.deviceName && !row.deviceNames.includes(rec.deviceName)) {
+        row.deviceNames.push(rec.deviceName);
+      }
+      if (rec.punchType && !row.punchTypes.includes(rec.punchType)) {
+        row.punchTypes.push(rec.punchType);
+      }
+      if (rec.manualNote && !row.notes.includes(rec.manualNote)) {
+        row.notes.push(rec.manualNote);
+      }
+    });
+
+    const rows = Array.from(map.values());
+    rows.sort((a, b) => {
+      const cmp = b.displayDate.localeCompare(a.displayDate);
+      if (cmp !== 0) return cmp;
+      return a.workerCode - b.workerCode;
+    });
+    return rows;
+  }, [filteredRecords]);
+
+  // Pagination calculation based on grouped daily rows
+  const totalPages = Math.max(1, Math.ceil(groupedRows.length / pageSize));
   const validPage = Math.min(currentPage, totalPages);
-  const paginatedRecords = useMemo(() => {
+  const paginatedRows = useMemo(() => {
     const startIndex = (validPage - 1) * pageSize;
-    return filteredRecords.slice(startIndex, startIndex + pageSize);
-  }, [filteredRecords, validPage, pageSize]);
+    return groupedRows.slice(startIndex, startIndex + pageSize);
+  }, [groupedRows, validPage, pageSize]);
 
   // Handle Export to Excel with full details
   const handleExportExcel = () => {
@@ -290,8 +413,6 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     if (!worker) return;
 
     const workerShift = shifts.find((s) => s.id === worker.shiftId) || shifts[0];
-    const isFriday = new Date(`${manualDate}T12:00:00`).getDay() === 5;
-    const fridayMultiplier = workerShift?.fridayMultiplier || 2.0;
     const otGraceMinutes = settings?.overtimeGraceMinutes ?? 30;
 
     let isOvertime = false;
@@ -300,23 +421,17 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     let autoNote = manualReason ? manualReason.trim() : 'تسجيل يدوي بواسطة HR';
 
     if (manualType === 'OUT') {
-      if (isFriday) {
-        isOvertime = true;
-        overtimeHours = 8 * fridayMultiplier;
-        autoNote += ` (عمل يوم جمعة مضاعف ${fridayMultiplier}x: ${overtimeHours} س)`;
-      } else {
-        const shiftEndStr = workerShift ? workerShift.endTime : (worker.shiftId === 'bangladeshi' ? '18:30' : (settings?.standardShiftEnd || '16:30'));
-        const [endH, endM] = shiftEndStr.split(':').map((v: string) => parseInt(v, 10) || 0);
-        const shiftEndMinutes = endH * 60 + endM;
-        const [mH, mM] = manualTime.split(':').map((v: string) => parseInt(v, 10) || 0);
-        const manualMinutes = mH * 60 + mM;
-        const pastEnd = manualMinutes - shiftEndMinutes;
+      const shiftEndStr = workerShift ? workerShift.endTime : (worker.shiftId === 'bangladeshi' ? '18:30' : (settings?.standardShiftEnd || '16:30'));
+      const [endH, endM] = shiftEndStr.split(':').map((v: string) => parseInt(v, 10) || 0);
+      const shiftEndMinutes = endH * 60 + endM;
+      const [mH, mM] = manualTime.split(':').map((v: string) => parseInt(v, 10) || 0);
+      const manualMinutes = mH * 60 + mM;
+      const pastEnd = manualMinutes - shiftEndMinutes;
 
-        if (pastEnd > otGraceMinutes) {
-          isOvertime = true;
-          overtimeHours = Number((pastEnd / 60).toFixed(2));
-          autoNote += ` (إضافي متوقع: ${overtimeHours} س)`;
-        }
+      if (pastEnd > otGraceMinutes) {
+        isOvertime = true;
+        overtimeHours = Number((pastEnd / 60).toFixed(2));
+        autoNote += ` (إضافي متوقع: ${overtimeHours} س)`;
       }
     } else if (manualType === 'IN') {
       const shiftStartStr = workerShift ? workerShift.startTime : (settings?.standardShiftStart || '08:00');
@@ -352,8 +467,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       isOvertime,
       overtimeHours,
       lateMinutes,
-      isFridayDouble: isFriday,
-      fridayMultiplier: isFriday ? fridayMultiplier : undefined,
+      isFridayDouble: false,
+      fridayMultiplier: undefined,
       manualNote: autoNote,
       manualEditor: manualEditor,
     };
@@ -931,18 +1046,14 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         {datePreset === 'custom' && (
           <div className="flex items-center gap-2 text-xs">
             <span className="text-slate-400">من:</span>
-            <input
-              type="date"
+            <CustomDatePicker
               value={customFromDate}
-              onChange={(e) => { setCustomFromDate(e.target.value); setCurrentPage(1); }}
-              className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono text-xs"
+              onChange={(val) => { setCustomFromDate(val); setCurrentPage(1); }}
             />
             <span className="text-slate-400">إلى:</span>
-            <input
-              type="date"
+            <CustomDatePicker
               value={customToDate}
-              onChange={(e) => { setCustomToDate(e.target.value); setCurrentPage(1); }}
-              className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono text-xs"
+              onChange={(val) => { setCustomToDate(val); setCurrentPage(1); }}
             />
           </div>
         )}
@@ -1016,7 +1127,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
       {/* Main Records Table with High-Performance Rendering */}
       <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden shadow-sm">
-        {paginatedRecords.length > 0 ? (
+        {paginatedRows.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-right text-xs">
               <thead>
@@ -1034,43 +1145,49 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
-                {paginatedRecords.map((record) => (
+                {paginatedRows.map((row) => (
                   <tr 
-                    key={record.id} 
+                    key={row.rowKey} 
                     className={`hover:bg-slate-850 transition-colors ${
-                      record.isDuplicateIgnored 
+                      row.isDuplicateIgnored 
                         ? 'bg-amber-950/20 opacity-75' 
-                        : record.isAmbiguousSinglePunch
+                        : row.hasAmbiguous
                           ? 'bg-amber-950/30 border-l-2 border-amber-500'
-                          : record.isMissedPunch 
+                          : row.hasMissedPunch 
                             ? 'bg-rose-950/15' 
                             : ''
                     }`}
                   >
                     <td className="py-2 px-3 text-slate-300 font-bold">
                       <span className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 text-[11px]">
-                        {record.workerCode}
+                        {row.workerCode}
                       </span>
                     </td>
                     <td className="py-2 px-3 text-white font-sans font-medium">
                       <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center gap-1.5">
-                          <span>{record.workerName}</span>
-                          {record.isHROverride && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{row.workerName}</span>
+                          {row.isHROverride && (
                             <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-sans font-normal" title="حركة معتمدة أو مضافة يدوياً بواسطة HR">
                               معتمد HR
                             </span>
                           )}
+                          {row.allPunches.length > 1 && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-blue-300 border border-slate-700 font-mono" title="عدد الحركات المسجلة لهذا اليوم">
+                              {row.allPunches.length} حركات
+                            </span>
+                          )}
                         </div>
-                        {record.missingInPunch ? (
-                          <div className="flex items-center gap-1.5 flex-wrap">
+
+                        {row.hasMissingIn && row.missingInRecord && (
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                             <span className="text-[10px] px-2 py-0.5 rounded bg-rose-600 text-white font-sans font-bold flex items-center gap-1 border border-rose-700 animate-pulse">
                               <AlertCircle className="w-3 h-3" />
                               <span>بصمة حضور ناقصة (Missing IN)</span>
                             </span>
                             <button
                               onClick={() => {
-                                setOverridingRecord(record);
+                                setOverridingRecord(row.missingInRecord!);
                                 setMissingInTime('08:00');
                                 setMissingInEditor('مسؤول الموارد البشرية');
                                 setOverrideReason('نسيان بصمة الصباح وتواجد بالعمل');
@@ -1082,8 +1199,10 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                               <span>إضافة حضور صباحي (IN)</span>
                             </button>
                           </div>
-                        ) : record.isAmbiguousSinglePunch ? (
-                          <div className="flex items-center gap-1.5 flex-wrap">
+                        )}
+
+                        {row.hasAmbiguous && row.ambiguousRecord && (
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                             <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-sans font-bold flex items-center gap-1 border border-amber-500/40">
                               <HelpCircle className="w-3 h-3 text-amber-400" />
                               <span>نافذة الغموض (12:00-15:59)</span>
@@ -1091,8 +1210,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                             {onUpdateRecord && (
                               <button
                                 onClick={() => {
-                                  setResolvingRecord(record);
-                                  setResolutionChoice(record.hasMorningIn ? 'duplicate' : 'temporary_pass');
+                                  setResolvingRecord(row.ambiguousRecord!);
+                                  setResolutionChoice(row.ambiguousRecord!.hasMorningIn ? 'duplicate' : 'temporary_pass');
                                   setExpectedReturnTime('14:30');
                                   setPassReason('تصريح شخصي معتمد');
                                 }}
@@ -1104,45 +1223,52 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                               </button>
                             )}
                           </div>
-                        ) : record.isReturnFromPass ? (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-sans font-bold border border-cyan-500/40 flex items-center gap-1 w-fit">
+                        )}
+
+                        {row.hasPassReturn && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-sans font-bold border border-cyan-500/40 flex items-center gap-1 w-fit mt-0.5">
                             <CheckCheck className="w-2.5 h-2.5" />
                             <span>حضور بعد تصريح</span>
                           </span>
-                        ) : record.ambiguousResolution === 'temporary_pass' ? (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-sans font-medium border border-amber-500/30 flex items-center gap-1 w-fit">
+                        )}
+
+                        {row.hasTemporaryPass && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-sans font-medium border border-amber-500/30 flex items-center gap-1 w-fit mt-0.5">
                             <span>تصريح مؤقت (خروج)</span>
                           </span>
-                        ) : record.isMissedPunch ? (
-                          <span className="text-[9px] text-rose-400 font-sans flex items-center gap-1" title={record.missedPunchReason}>
+                        )}
+
+                        {row.hasMissedPunch && (
+                          <span className="text-[9px] text-rose-400 font-sans flex items-center gap-1 mt-0.5" title={row.missedPunchReason}>
                             <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
-                            <span>{record.missedPunchReason || 'بصمة ناقصة'}</span>
+                            <span>{row.missedPunchReason || 'بصمة ناقصة'}</span>
                           </span>
-                        ) : null}
-                        {record.isDuplicateIgnored && (
-                          <span className="text-[9px] text-amber-400/80 font-sans">
-                            {record.duplicateReason || 'تكرار مستبعد (أقل من ساعة)'}
+                        )}
+
+                        {row.isDuplicateIgnored && (
+                          <span className="text-[9px] text-amber-400/80 font-sans mt-0.5">
+                            تكرار مستبعد (أقل من ساعة)
                           </span>
                         )}
                       </div>
                     </td>
                     <td className="py-2 px-3 text-slate-300 font-sans text-[11px]">
-                      {record.department}
+                      {row.department}
                     </td>
                     <td className="py-2 px-3 text-slate-300 text-[11px]">
-                      {record.displayDate}
+                      {row.displayDate}
                     </td>
 
                     {/* عمود حضور (Check-In) */}
                     <td className="py-2 px-3 text-center">
-                      {record.resolvedState === 'IN' ? (
+                      {row.checkInRecord ? (
                         <div className="flex flex-col items-center gap-0.5">
                           <span className="text-xs font-bold text-emerald-400 font-mono bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-500/30">
-                            {record.displayTime}
+                            {row.checkInRecord.displayTime}
                           </span>
-                          {(record.lateMinutes || 0) > 0 && (
-                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans font-bold" title={`تأخير: ${record.lateMinutes} دقيقة`}>
-                              +{record.lateMinutes} د تأخير
+                          {(row.lateMinutes || 0) > 0 && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans font-bold" title={`تأخير: ${row.lateMinutes} دقيقة`}>
+                              +{row.lateMinutes} د تأخير
                             </span>
                           )}
                         </div>
@@ -1153,19 +1279,19 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
                     {/* عمود انصراف (Check-Out) */}
                     <td className="py-2 px-3 text-center">
-                      {record.resolvedState === 'OUT' ? (
+                      {row.checkOutRecord ? (
                         <div className="flex flex-col items-center gap-0.5">
                           <span className="text-xs font-bold text-blue-400 font-mono bg-blue-950/40 px-2 py-0.5 rounded border border-blue-500/30">
-                            {record.displayTime}
+                            {row.checkOutRecord.displayTime}
                           </span>
-                          {record.isEarlyDeparture && (
-                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={record.earlyDepartureReason}>
-                              انصراف مبكر (-{record.earlyDepartureMinutes || 0} د)
+                          {row.isEarlyDeparture && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans" title={`انصراف مبكر: ${row.earlyDepartureMinutes || 0} دقيقة`}>
+                              انصراف مبكر (-{row.earlyDepartureMinutes || 0} د)
                             </span>
                           )}
-                          {record.isOvertime && (
-                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-sans font-bold" title={`إضافي: ${record.overtimeHours} ساعة`}>
-                              +{record.overtimeHours} س إضافي
+                          {(row.overtimeHours || 0) > 0 && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-sans font-bold" title={`إضافي: ${row.overtimeHours} ساعة`}>
+                              +{row.overtimeHours} س إضافي
                             </span>
                           )}
                         </div>
@@ -1173,49 +1299,82 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                         <span className="text-slate-600 font-mono text-sm font-bold">—</span>
                       )}
                     </td>
+
+                    {/* طريقة البصمة */}
                     <td className="py-2 px-3 text-center">
-                      {record.punchType === 'FACE' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30">
-                          <ScanFace className="w-3 h-3 text-purple-400 shrink-0" />
-                          <span>بصمة وجه</span>
-                        </span>
-                      ) : record.punchType === 'CARD' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                          <CreditCard className="w-3 h-3 text-amber-400 shrink-0" />
-                          <span>كارت</span>
-                        </span>
-                      ) : record.punchType === 'MANUAL' || record.isManual ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                          <Edit2 className="w-3 h-3 text-indigo-400 shrink-0" />
-                          <span>يدوي (HR)</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-medium bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                          <Fingerprint className="w-3 h-3 text-cyan-400 shrink-0" />
-                          <span>بصمة إصبع</span>
-                        </span>
-                      )}
+                      <div className="flex flex-wrap items-center justify-center gap-1">
+                        {row.punchTypes.map((pt, idx) => {
+                          if (pt === 'FACE') {
+                            return (
+                              <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                                <ScanFace className="w-3 h-3 text-purple-400 shrink-0" />
+                                <span>وجه</span>
+                              </span>
+                            );
+                          }
+                          if (pt === 'CARD') {
+                            return (
+                              <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                <CreditCard className="w-3 h-3 text-amber-400 shrink-0" />
+                                <span>كارت</span>
+                              </span>
+                            );
+                          }
+                          if (pt === 'MANUAL') {
+                            return (
+                              <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                                <Edit2 className="w-3 h-3 text-indigo-400 shrink-0" />
+                                <span>يدوي</span>
+                              </span>
+                            );
+                          }
+                          return (
+                            <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                              <Fingerprint className="w-3 h-3 text-cyan-400 shrink-0" />
+                              <span>إصبع</span>
+                            </span>
+                          );
+                        })}
+                      </div>
                     </td>
+
+                    {/* الماكينة */}
                     <td className="py-2 px-3 text-slate-300 font-sans text-[11px]">
-                      {record.deviceName}
+                      {row.deviceNames.join('، ') || '—'}
                     </td>
+
+                    {/* ملاحظات */}
                     <td className="py-2 px-3 text-slate-400 font-sans text-[11px]">
-                      {record.manualNote || '—'}
+                      {row.notes.join(' | ') || '—'}
                     </td>
+
+                    {/* إجراءات */}
                     <td className="py-2 px-3 text-center">
                       <div className="flex items-center justify-center gap-1">
                         <button
-                          onClick={() => handleStartEdit(record)}
+                          onClick={() => {
+                            if (row.allPunches.length === 1) {
+                              handleStartEdit(row.allPunches[0]);
+                            } else {
+                              setMultiPunchModal({ mode: 'edit', row });
+                            }
+                          }}
                           className="p-1 rounded bg-slate-800 hover:bg-blue-600/30 text-slate-300 hover:text-blue-400 transition-colors cursor-pointer"
-                          title="تعديل بصمة العامل"
+                          title={row.allPunches.length > 1 ? `اختيار حركة للتعديل (${row.allPunches.length} حركات مسجلة)` : 'تعديل بصمة العامل'}
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         {onDeleteRecord && (
                           <button
-                            onClick={() => setDeleteConfirmId(record.id)}
+                            onClick={() => {
+                              if (row.allPunches.length === 1) {
+                                setDeleteConfirmId(row.allPunches[0].id);
+                              } else {
+                                setMultiPunchModal({ mode: 'delete', row });
+                              }
+                            }}
                             className="p-1 rounded bg-slate-800 hover:bg-rose-600/30 text-slate-300 hover:text-rose-400 transition-colors cursor-pointer"
-                            title="حذف الحركة"
+                            title={row.allPunches.length > 1 ? `اختيار حركة للحذف (${row.allPunches.length} حركات مسجلة)` : 'حذف الحركة'}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -1238,12 +1397,12 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         )}
 
         {/* Pagination Bar */}
-        {filteredRecords.length > pageSize && (
+        {groupedRows.length > pageSize && (
           <div className="bg-slate-950 p-2.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="text-slate-400 font-mono text-[11px]">
               عرض السجلات من <span className="text-white font-bold">{((validPage - 1) * pageSize) + 1}</span> إلى{' '}
-              <span className="text-white font-bold">{Math.min(validPage * pageSize, filteredRecords.length)}</span> من أصل{' '}
-              <span className="text-blue-400 font-bold">{filteredRecords.length.toLocaleString('ar-EG')}</span>
+              <span className="text-white font-bold">{Math.min(validPage * pageSize, groupedRows.length)}</span> من أصل{' '}
+              <span className="text-blue-400 font-bold">{groupedRows.length.toLocaleString('ar-EG')}</span> يوم عمل (إجمالي {filteredRecords.length.toLocaleString('ar-EG')} حركة)
             </div>
 
             <div className="flex items-center gap-1.5 font-mono">
@@ -1334,12 +1493,10 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
               <div>
                 <label className="text-slate-300 block mb-1">التاريخ:</label>
-                <input
-                  type="date"
+                <CustomDatePicker
                   value={manualDate}
-                  onChange={(e) => setManualDate(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-white font-mono"
-                  required
+                  onChange={(val) => setManualDate(val)}
+                  className="w-full"
                 />
               </div>
 
@@ -1427,12 +1584,10 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-slate-300 block mb-1">التاريخ:</label>
-                  <input
-                    type="date"
+                  <CustomDatePicker
                     value={editDate}
-                    onChange={(e) => setEditDate(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white font-mono"
-                    required
+                    onChange={(val) => setEditDate(val)}
+                    className="w-full"
                   />
                 </div>
 
@@ -2044,6 +2199,116 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 className="px-4 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium cursor-pointer"
               >
                 إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task 9: Multi-Punch Selection Modal for consolidated daily rows */}
+      {multiPunchModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-lg p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                {multiPunchModal.mode === 'edit' ? (
+                  <Edit2 className="w-4 h-4 text-blue-400" />
+                ) : (
+                  <Trash2 className="w-4 h-4 text-rose-400" />
+                )}
+                <div>
+                  <h3 className="text-sm font-bold text-white">
+                    {multiPunchModal.mode === 'edit'
+                      ? 'تحديد حركة البصمة للتعديل'
+                      : 'تحديد حركة البصمة للحذف'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    العامل: <span className="text-slate-200 font-bold">{multiPunchModal.row.workerName}</span> (#{multiPunchModal.row.workerCode}) | التاريخ: <span className="font-mono text-cyan-300">{multiPunchModal.row.displayDate}</span>
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setMultiPunchModal(null)} 
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs text-slate-300">
+                يحتوي هذا اليوم على <span className="font-bold text-white font-mono">{multiPunchModal.row.allPunches.length}</span> حركات بصمة مسجلة. الرجاء اختيار الحركة التي ترغب في {multiPunchModal.mode === 'edit' ? 'تعديلها' : 'حذفها'}:
+              </p>
+
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {multiPunchModal.row.allPunches.map((punch, idx) => (
+                  <div
+                    key={punch.id || idx}
+                    className="p-3 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 flex items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center font-mono text-[10px]">
+                        {idx + 1}
+                      </span>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            punch.resolvedState === 'IN'
+                              ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-blue-950/60 text-blue-300 border border-blue-500/30'
+                          }`}>
+                            {punch.resolvedState === 'IN' ? 'حضور (Check-In)' : 'انصراف (Check-Out)'}
+                          </span>
+                          <span className="font-mono font-bold text-white text-xs">
+                            {punch.displayTime}
+                          </span>
+                          {punch.isHROverride && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                              معتمد HR
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-2">
+                          <span>الماكينة: {punch.deviceName || 'بدون'}</span>
+                          {punch.manualNote && (
+                            <span className="text-slate-500">| {punch.manualNote}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetPunch = punch;
+                        const mode = multiPunchModal.mode;
+                        setMultiPunchModal(null);
+                        if (mode === 'edit') {
+                          handleStartEdit(targetPunch);
+                        } else {
+                          setDeleteConfirmId(targetPunch.id);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                        multiPunchModal.mode === 'edit'
+                          ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                          : 'bg-rose-600 hover:bg-rose-500 text-white'
+                      }`}
+                    >
+                      {multiPunchModal.mode === 'edit' ? 'تعديل هذه الحركة' : 'حذف هذه الحركة'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setMultiPunchModal(null)}
+                className="px-4 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer"
+              >
+                إلغاء
               </button>
             </div>
           </div>
