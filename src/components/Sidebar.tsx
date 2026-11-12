@@ -9,7 +9,8 @@ import {
   FileSpreadsheet, 
   Settings,
   MonitorDown,
-  Activity
+  Activity,
+  Palmtree
 } from 'lucide-react';
 
 export type ActiveTab = 
@@ -19,6 +20,7 @@ export type ActiveTab =
   | 'workers' 
   | 'shifts' 
   | 'gatepasses' 
+  | 'leaves'
   | 'reports' 
   | 'settings';
 
@@ -36,6 +38,7 @@ interface SidebarProps {
   devicesCount: number;
   workersCount: number;
   gatePassesCount: number;
+  leavesCount?: number;
   activityLogs?: ActivityLogEntry[];
 }
 
@@ -46,6 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   devicesCount,
   workersCount,
   gatePassesCount,
+  leavesCount = 0,
   activityLogs = [],
 }) => {
   const menuItems = [
@@ -77,6 +81,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'أذونات وتصاريح الخروج',
       icon: DoorOpen,
       badge: gatePassesCount > 0 ? `${gatePassesCount}` : undefined,
+    },
+    {
+      id: 'leaves' as ActiveTab,
+      label: 'نظام الإجازات',
+      icon: Palmtree,
+      badge: leavesCount > 0 ? `${leavesCount}` : undefined,
     },
     {
       id: 'reports' as ActiveTab,
@@ -159,7 +169,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3 border-t border-slate-800/80 text-[10px] text-slate-400 bg-slate-950/40 shrink-0">
         <div className="flex items-center justify-between font-mono">
           <span title="مطور النظام">المطور: Muhammad Abdullah</span>
-          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 5.6.2</span>
+          <span className="text-emerald-400 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">V 5.7.0</span>
         </div>
       </div>
     </aside>

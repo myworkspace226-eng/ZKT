@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Calendar, ChevronRight, ChevronLeft, X, Check } from 'lucide-react';
+import { Calendar, ChevronRight, ChevronLeft } from 'lucide-react';
 
 export interface CustomDatePickerProps {
   value?: string; // Format: "YYYY-MM-DD"
@@ -127,11 +127,6 @@ export const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
     setIsOpen(false);
   };
 
-  const handleClear = () => {
-    onChange('');
-    setIsOpen(false);
-  };
-
   const todayISO = useMemo(() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -164,18 +159,6 @@ export const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
             {value || placeholder}
           </span>
         </div>
-        {value && !disabled && (
-          <span
-            onClick={(e) => {
-              e.stopPropagation();
-              onChange('');
-            }}
-            title="مسح التاريخ"
-            className="text-slate-500 hover:text-slate-300 p-0.5 rounded transition-colors"
-          >
-            <X className="w-3 h-3" />
-          </span>
-        )}
       </button>
 
       {/* Modern Popover */}
@@ -281,23 +264,15 @@ export const CustomDatePicker: React.FC<CustomDatePickerProps> = ({
             <button
               type="button"
               onClick={handleToday}
-              className="px-2 py-0.5 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 font-medium transition-colors cursor-pointer"
+              className="px-2.5 py-1 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 font-medium transition-colors cursor-pointer"
             >
               اليوم
             </button>
 
             <button
               type="button"
-              onClick={handleClear}
-              className="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
-            >
-              مسح
-            </button>
-
-            <button
-              type="button"
               onClick={() => setIsOpen(false)}
-              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-colors cursor-pointer"
+              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-colors cursor-pointer"
             >
               إغلاق
             </button>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Users, 
   UserCheck, 
@@ -14,9 +14,12 @@ import {
   Search,
   Sparkles,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  ChevronRight,
+  ChevronLeft,
+  Palmtree
 } from 'lucide-react';
-import { Worker, AttendanceRecord, GatePass, ShiftRule, FactorySettings } from '../types';
+import { Worker, AttendanceRecord, GatePass, ShiftRule, FactorySettings, LeaveRecord, OfficialHoliday } from '../types';
 import { calculateDailyPerformance, exportToExcel, formatHoursAndMinutes } from '../utils/attendanceEngine';
 import { CustomDatePicker } from './CustomDatePicker';
 
@@ -26,6 +29,8 @@ interface DailySummaryProps {
   gatePasses: GatePass[];
   shifts?: ShiftRule[];
   settings?: FactorySettings;
+  leaves?: LeaveRecord[];
+  officialHolidays?: OfficialHoliday[];
 }
 
 export const DailySummary: React.FC<DailySummaryProps> = ({
@@ -34,11 +39,22 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
   gatePasses,
   shifts = [],
   settings,
+  leaves = [],
+  officialHolidays = [],
 }) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
-  const [filterStatus, setFilterStatus] = useState<'all' | 'present' | 'absent' | 'late' | 'pass'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'present' | 'absent' | 'leave' | 'late' | 'pass'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Pagination State (Task 4)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(50);
+
+  // Reset page to 1 when date changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedDate]);
 
   // Quick Date Setters
   const handleSetToday = () => setSelectedDate(todayStr);
@@ -153,9 +169,41 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           passNote: passInfo ? `${passInfo.type === 'temporary' ? 'تصريح مؤقت' : 'إذن خروج'} (${passInfo.exitTime} - ${passInfo.returnTime || 'نهاية اليوم'})` : '',
         };
       } else {
+        const workerLeave = leaves.find((l) =>
+          Number(l.workerCode) === Number(worker.code) && (
+            (l.startDate && l.endDate && selectedDate >= l.startDate && selectedDate <= l.endDate) ||
+            (l.specificDates && l.specificDates.includes(selectedDate))
+          )
+        );
+        const officialHoliday = officialHolidays.find((h) => h.date === selectedDate);
+        const isLeave = Boolean(workerLeave || officialHoliday);
+
+        if (isLeave) {
+          const leaveLabel = officialHoliday
+            ? `عطلة رسمية (${officialHoliday.name})`
+            : `إجازة (${workerLeave?.leaveType === 'excused_annual' ? 'اعتيادية' : workerLeave?.leaveType === 'excused_casual' ? 'عارضة' : workerLeave?.leaveType === 'medical' ? 'مرضية' : 'إذن رسمي'})`;
+          const note = officialHoliday ? officialHoliday.name : (workerLeave?.note || 'إجازة معتمدة');
+
+          return {
+            worker,
+            isPresent: false,
+            isLeave: true,
+            status: leaveLabel,
+            inTime: '—',
+            outTime: '—',
+            lateMinutes: 0,
+            earlyMinutes: 0,
+            overtimeHours: 0,
+            workHours: 0,
+            hasPass,
+            passNote: note,
+          };
+        }
+
         return {
           worker,
           isPresent: false,
+          isLeave: false,
           status: 'غائب',
           inTime: '—',
           outTime: '—',
@@ -170,7 +218,8 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
     });
 
     const totalActive = activeWorkers.length;
-    const absentCount = Math.max(0, totalActive - presentCount);
+    const leaveCount = workerPerformanceList.filter((p) => p.isLeave).length;
+    const absentCount = workerPerformanceList.filter((p) => !p.isPresent && !p.isLeave).length;
     const passCount = dayPasses.length;
     const attendanceRate = totalActive > 0 ? Math.round((presentCount / totalActive) * 100) : 0;
 
@@ -178,6 +227,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
       totalActive,
       presentCount,
       absentCount,
+      leaveCount,
       lateCount,
       totalLateMinutes,
       earlyCount,
@@ -188,14 +238,15 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
       isFriday,
       workerPerformanceList,
     };
-  }, [selectedDate, workers, processedAttendanceRecords, gatePasses, shifts, settings]);
+  }, [selectedDate, workers, processedAttendanceRecords, gatePasses, shifts, settings, leaves, officialHolidays]);
 
   // Filtered workers list
   const filteredList = useMemo(() => {
     return summaryData.workerPerformanceList.filter((item) => {
       // Status Filter
       if (filterStatus === 'present' && !item.isPresent) return false;
-      if (filterStatus === 'absent' && item.isPresent) return false;
+      if (filterStatus === 'absent' && (item.isPresent || item.isLeave)) return false;
+      if (filterStatus === 'leave' && !item.isLeave) return false;
       if (filterStatus === 'late' && item.lateMinutes <= 0) return false;
       if (filterStatus === 'pass' && !item.hasPass) return false;
 
@@ -211,6 +262,14 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
       return true;
     });
   }, [summaryData, filterStatus, searchQuery]);
+
+  // Pagination calculation (Task 4)
+  const totalPages = Math.max(1, Math.ceil(filteredList.length / pageSize));
+  const validPage = Math.min(currentPage, totalPages);
+  const paginatedList = useMemo(() => {
+    const startIndex = (validPage - 1) * pageSize;
+    return filteredList.slice(startIndex, startIndex + pageSize);
+  }, [filteredList, validPage, pageSize]);
 
   // Export Day's Performance to Excel
   const handleExportExcel = () => {
@@ -242,14 +301,9 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
       {/* Top Header with Date Selection */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xs">
         <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <span>ملخص اليوم</span>
-            </h2>
-            <span className="text-xs px-2 py-0.5 rounded bg-blue-600/20 text-blue-400 font-mono border border-blue-500/30">
-              V 5.6.2
-            </span>
-          </div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2">
+            <span>ملخص اليوم</span>
+          </h2>
         </div>
 
         {/* Date Selector Controls */}
@@ -329,7 +383,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           </div>
         </div>
 
-        {/* Card 3: Absent Workers (Red) */}
+        {/* Card 3: Absent Workers (Red - Leaves excluded) */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between hover:border-rose-500/40 transition-colors shadow-sm">
           <div>
             <span className="text-slate-400 text-xs block font-medium">الغياب المسجل</span>
@@ -339,14 +393,29 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
                 {summaryData.totalActive > 0 ? Math.round((summaryData.absentCount / summaryData.totalActive) * 100) : 0}%
               </span>
             </div>
-            <span className="text-[10px] text-rose-400/80 block mt-0.5">لم تسجل لهم أي بصمة</span>
+            <span className="text-[10px] text-rose-400/80 block mt-0.5">بدون إذن أو إجازة</span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
             <UserX className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 4: Delayed Workers (Amber/Orange) */}
+        {/* Card 4: Leaves & Holidays (Teal/Palmtree) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between hover:border-teal-500/40 transition-colors shadow-sm">
+          <div>
+            <span className="text-slate-400 text-xs block font-medium">إجازات وعطلات اليوم</span>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-black text-teal-300 font-mono">{summaryData.leaveCount}</span>
+              <span className="text-[11px] text-teal-400">إجازة معتمدة</span>
+            </div>
+            <span className="text-[10px] text-teal-400/80 block mt-0.5">سنوية / عارضة / مرضي / عطلة</span>
+          </div>
+          <div className="w-10 h-10 rounded-lg bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400">
+            <Palmtree className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Card 5: Delayed Workers (Amber/Orange) */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between hover:border-amber-500/40 transition-colors shadow-sm">
           <div>
             <span className="text-slate-400 text-xs block font-medium">المتأخرين بعد السماحية</span>
@@ -363,7 +432,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           </div>
         </div>
 
-        {/* Card 5: Early Departures (Yellow/Orange) */}
+        {/* Card 6: Early Departures (Yellow/Orange) */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between hover:border-yellow-500/40 transition-colors shadow-sm">
           <div>
             <span className="text-slate-400 text-xs block font-medium">الانصراف المبكر</span>
@@ -380,7 +449,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           </div>
         </div>
 
-        {/* Card 6: Total Overtime Hours (Purple) */}
+        {/* Card 7: Total Overtime Hours (Purple) */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between hover:border-purple-500/40 transition-colors shadow-sm">
           <div>
             <span className="text-slate-400 text-xs block font-medium">إجمالي ساعات الإضافي</span>
@@ -397,8 +466,8 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           </div>
         </div>
 
-        {/* Card 7: Out with Gate Pass (Cyan/Sky) */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between hover:border-cyan-500/40 transition-colors shadow-sm sm:col-span-2 md:col-span-1 lg:col-span-2">
+        {/* Card 8: Out with Gate Pass (Cyan/Sky) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between hover:border-cyan-500/40 transition-colors shadow-sm">
           <div>
             <span className="text-slate-400 text-xs block font-medium">تصاريح وأذونات اليوم</span>
             <div className="flex items-baseline gap-2 mt-1">
@@ -421,12 +490,13 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
               { id: 'all', label: `الكل (${summaryData.totalActive})` },
               { id: 'present', label: `حاضر (${summaryData.presentCount})` },
               { id: 'absent', label: `غائب (${summaryData.absentCount})` },
+              { id: 'leave', label: `إجازة (${summaryData.leaveCount})` },
               { id: 'late', label: `متأخر (${summaryData.lateCount})` },
               { id: 'pass', label: `بتصريح (${summaryData.passCount})` },
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setFilterStatus(tab.id as any)}
+                onClick={() => { setFilterStatus(tab.id as any); setCurrentPage(1); }}
                 className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                   filterStatus === tab.id
                     ? 'bg-blue-600 text-white font-bold shadow-xs'
@@ -444,7 +514,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
               type="text"
               placeholder="بحث بالاسم، الكود، أو القسم..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
               className="w-full bg-slate-950 border border-slate-700 rounded-lg pr-9 pl-3 py-1.5 text-xs text-white focus:outline-hidden"
             />
           </div>
@@ -467,8 +537,8 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
-              {filteredList.length > 0 ? (
-                filteredList.map((item) => (
+              {paginatedList.length > 0 ? (
+                paginatedList.map((item) => (
                   <tr key={item.worker.code} className="hover:bg-slate-850 transition-colors">
                     <td className="py-2 px-3 text-slate-300 font-bold">
                       <span className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 text-[11px]">
@@ -485,7 +555,9 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
                       <span className={`text-[10px] font-sans font-bold px-2 py-0.5 rounded inline-block ${
                         item.isPresent
                           ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                          : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                          : item.isLeave
+                            ? 'bg-teal-500/15 text-teal-300 border border-teal-500/30'
+                            : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
                       }`}>
                         {item.status}
                       </span>
@@ -539,6 +611,44 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Bar (Task 4) */}
+        {filteredList.length > pageSize && (
+          <div className="bg-slate-950 p-2.5 border border-slate-800 rounded-lg flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="text-slate-400 font-mono text-[11px]">
+              عرض العمال من <span className="text-white font-bold">{((validPage - 1) * pageSize) + 1}</span> إلى{' '}
+              <span className="text-white font-bold">{Math.min(validPage * pageSize, filteredList.length)}</span> من أصل{' '}
+              <span className="text-blue-400 font-bold">{filteredList.length}</span> عامل
+            </div>
+
+            <div className="flex items-center gap-1.5 font-mono">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={validPage <= 1}
+                className="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+                <span className="font-sans text-xs">السابق</span>
+              </button>
+
+              <span className="text-slate-300 px-2 text-[11px]">
+                صفحة <span className="text-white font-bold">{validPage}</span> من{' '}
+                <span className="text-white font-bold">{totalPages}</span>
+              </span>
+
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={validPage >= totalPages}
+                className="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1"
+              >
+                <span className="font-sans text-xs">التالي</span>
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

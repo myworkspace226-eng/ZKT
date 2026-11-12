@@ -13,6 +13,7 @@ import { GatePassManager } from './components/GatePassManager';
 import { ReportsCenter } from './components/ReportsCenter';
 import { SettingsManager } from './components/SettingsManager';
 import { DailySummary } from './components/DailySummary';
+import { LeavesManager } from './components/LeavesManager';
 
 import { 
   INITIAL_DEVICES, 
@@ -22,7 +23,7 @@ import {
   INITIAL_GATE_PASSES,
   DEFAULT_FACTORY_SETTINGS
 } from './data/mockData';
-import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings, HRAuditRecord, AbsenceCategory } from './types';
+import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings, HRAuditRecord, AbsenceCategory, LeaveRecord, OfficialHoliday } from './types';
 import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './services/deviceConnection';
 import { resolveSmartPunchState, processSmartAttendanceLogs } from './utils/attendanceEngine';
 
@@ -186,11 +187,74 @@ export default function App() {
     setAuditLog((prev) => [record, ...prev]);
   };
 
+  // Leaves and Official Holidays Management State (V 5.7.0)
+  const [leaves, setLeaves] = useState<LeaveRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('zkt_leaves_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error('Error loading leaves from localStorage', e);
+    }
+    return [];
+  });
+
+  const [officialHolidays, setOfficialHolidays] = useState<OfficialHoliday[]>(() => {
+    try {
+      const saved = localStorage.getItem('zkt_official_holidays_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error('Error loading official holidays from localStorage', e);
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_leaves_v1', JSON.stringify(leaves));
+      } catch (e) {
+        console.error('Error saving leaves', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [leaves]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_official_holidays_v1', JSON.stringify(officialHolidays));
+      } catch (e) {
+        console.error('Error saving official holidays', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [officialHolidays]);
+
+  const handleAddLeave = (newLeave: LeaveRecord) => {
+    setLeaves((prev) => [newLeave, ...prev]);
+    showNotification(`تم تسجيل إجازة للعامل (${newLeave.workerName}).`);
+  };
+
+  const handleDeleteLeave = (id: string) => {
+    setLeaves((prev) => prev.filter((l) => l.id !== id));
+    showNotification('🗑️ تم حذف سجل الإجازة بنجاح.');
+  };
+
+  const handleAddOfficialHoliday = (newHoliday: OfficialHoliday) => {
+    setOfficialHolidays((prev) => [...prev, newHoliday].sort((a, b) => a.date.localeCompare(b.date)));
+    showNotification(`تمت إضافة العطلة الرسمية (${newHoliday.name}) بنجاح.`);
+  };
+
+  const handleDeleteOfficialHoliday = (id: string) => {
+    setOfficialHolidays((prev) => prev.filter((h) => h.id !== id));
+    showNotification('🗑️ تم حذف العطلة الرسمية بنجاح.');
+  };
+
   const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 5.6.2', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 5.7.0', 
       type: 'info' 
     }
   ]);
@@ -834,13 +898,15 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '5.6.2',
+      version: '5.7.0',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
       workers,
       shifts,
       gatePasses,
+      leaves,
+      officialHolidays,
       attendanceRecords,
       absenceOverrides,
     };
@@ -862,6 +928,14 @@ export default function App() {
       if (data.workers) setWorkers(data.workers);
       if (data.shifts) setShifts(data.shifts);
       if (data.gatePasses) setGatePasses(data.gatePasses);
+      if (data.leaves) {
+        setLeaves(data.leaves);
+        localStorage.setItem('zkt_leaves_v1', JSON.stringify(data.leaves));
+      }
+      if (data.officialHolidays) {
+        setOfficialHolidays(data.officialHolidays);
+        localStorage.setItem('zkt_official_holidays_v1', JSON.stringify(data.officialHolidays));
+      }
       if (data.attendanceRecords) setAttendanceRecords(data.attendanceRecords);
       if (data.factorySettings) setSettings(data.factorySettings);
       if (data.absenceOverrides) {
@@ -880,7 +954,17 @@ export default function App() {
     setAttendanceRecords(INITIAL_ATTENDANCE_RECORDS);
     setShifts(INITIAL_SHIFT_RULES);
     setGatePasses(INITIAL_GATE_PASSES);
+    setLeaves([]);
+    setOfficialHolidays([]);
     setSettings(DEFAULT_FACTORY_SETTINGS);
+    setAbsenceOverrides({});
+    try {
+      localStorage.removeItem('zkt_absence_overrides');
+      localStorage.removeItem('zkt_leaves_v1');
+      localStorage.removeItem('zkt_official_holidays_v1');
+    } catch {
+      // ignore
+    }
     showNotification('تمت إعادة ضبط البيانات إلى الوضع الافتراضي.');
   };
 
@@ -910,6 +994,7 @@ export default function App() {
           devicesCount={devices.length}
           workersCount={workers.length}
           gatePassesCount={gatePasses.length}
+          leavesCount={leaves.length}
           activityLogs={activityLogs}
         />
 
@@ -922,6 +1007,8 @@ export default function App() {
                 gatePasses={gatePasses}
                 shifts={shifts}
                 settings={settings}
+                leaves={leaves}
+                officialHolidays={officialHolidays}
               />
             )}
 
@@ -1030,6 +1117,7 @@ export default function App() {
                 settings={settings}
                 auditLog={auditLog}
                 gatePasses={gatePasses}
+                leaves={leaves}
                 onAddManualRecord={handleAddManualRecord}
                 onUpdateRecord={handleUpdateRecord}
                 onDeleteRecord={handleDeleteRecord}
@@ -1060,6 +1148,18 @@ export default function App() {
               />
             )}
 
+            {activeTab === 'leaves' && (
+              <LeavesManager
+                leaves={leaves}
+                officialHolidays={officialHolidays}
+                workers={workers}
+                onAddLeave={handleAddLeave}
+                onDeleteLeave={handleDeleteLeave}
+                onAddOfficialHoliday={handleAddOfficialHoliday}
+                onDeleteOfficialHoliday={handleDeleteOfficialHoliday}
+              />
+            )}
+
             {activeTab === 'reports' && (
               <ReportsCenter
                 workers={workers}
@@ -1071,6 +1171,8 @@ export default function App() {
                 factoryName={settings.factoryName}
                 absenceOverrides={absenceOverrides}
                 onUpdateAbsenceOverrides={handleUpdateAbsenceOverrides}
+                leaves={leaves}
+                officialHolidays={officialHolidays}
                 onSyncDevices={handleSyncAllDevices}
                 isSyncing={isSyncing}
               />

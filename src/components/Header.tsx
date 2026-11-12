@@ -99,10 +99,9 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <div className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
               <span>نظام إدارة البصمة</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-mono">V 5.6.2</span>
             </div>
             <div className="text-[10px] text-slate-400">
-              المطور: <span className="text-cyan-300 font-medium">Muhammad Abdullah</span>
+              المطور: <span className="text-cyan-300 font-medium">Muhammad Abdullah</span> • <span className="text-cyan-400 font-mono font-medium">V 5.7.0</span>
             </div>
           </div>
         </div>

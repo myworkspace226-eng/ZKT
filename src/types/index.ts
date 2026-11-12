@@ -189,3 +189,20 @@ export interface ProductionLineStatus {
   attendanceRate: number;
   isCritical: boolean;
 }
+
+export interface LeaveRecord {
+  id: string;
+  workerCode: number;
+  workerName: string;
+  leaveType: 'excused_annual' | 'excused_casual' | 'medical' | 'official_pass';
+  startDate?: string; // للفترات المتصلة
+  endDate?: string;   // للفترات المتصلة
+  specificDates?: string[]; // للأيام المتفرقة
+  note: string;
+}
+
+export interface OfficialHoliday {
+  id: string;
+  date: string;
+  name: string;
+}

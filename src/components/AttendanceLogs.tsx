@@ -28,7 +28,7 @@ import {
   CheckCheck,
   ShieldCheck
 } from 'lucide-react';
-import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GatePass, PunchType, ShiftRule } from '../types';
+import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GatePass, PunchType, ShiftRule, LeaveRecord } from '../types';
 import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
 import { CustomDatePicker } from './CustomDatePicker';
 
@@ -38,6 +38,7 @@ export interface GroupedAttendanceRow {
   workerName: string;
   department: string;
   displayDate: string;
+  lastPunchTime: string;
   checkInRecord?: AttendanceRecord;
   checkOutRecord?: AttendanceRecord;
   allPunches: AttendanceRecord[];
@@ -70,6 +71,7 @@ interface AttendanceLogsProps {
   settings?: FactorySettings;
   auditLog?: HRAuditRecord[];
   gatePasses?: GatePass[];
+  leaves?: LeaveRecord[];
   onAddManualRecord: (record: AttendanceRecord) => void;
   onUpdateRecord?: (record: AttendanceRecord) => void;
   onDeleteRecord?: (id: string) => void;
@@ -89,6 +91,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   settings,
   auditLog = [],
   gatePasses = [],
+  leaves = [],
   onAddManualRecord,
   onUpdateRecord,
   onDeleteRecord,
@@ -293,6 +296,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
     filteredRecords.forEach((rec) => {
       const key = `${rec.workerCode}_${rec.displayDate}`;
+      const recPunchTime = rec.timestamp || `${rec.displayDate}T${rec.displayTime}:00`;
       let row = map.get(key);
       if (!row) {
         row = {
@@ -301,6 +305,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           workerName: rec.workerName,
           department: rec.department,
           displayDate: rec.displayDate,
+          lastPunchTime: recPunchTime,
           allPunches: [],
           hasMissingIn: false,
           hasAmbiguous: false,
@@ -314,6 +319,10 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           notes: [],
         };
         map.set(key, row);
+      } else {
+        if (!row.lastPunchTime || recPunchTime.localeCompare(row.lastPunchTime) > 0) {
+          row.lastPunchTime = recPunchTime;
+        }
       }
 
       row.allPunches.push(rec);
@@ -364,16 +373,23 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       if (rec.manualNote && !row.notes.includes(rec.manualNote)) {
         row.notes.push(rec.manualNote);
       }
+
+      // Check if worker punched on a scheduled leave day (⚠️ قطع إجازة)
+      const isOnLeaveDay = leaves.some((l) =>
+        Number(l.workerCode) === Number(rec.workerCode) && (
+          (l.startDate && l.endDate && rec.displayDate >= l.startDate && rec.displayDate <= l.endDate) ||
+          (l.specificDates && l.specificDates.includes(rec.displayDate))
+        )
+      );
+      if (isOnLeaveDay && !row.notes.includes('⚠️ قطع إجازة')) {
+        row.notes.push('⚠️ قطع إجازة');
+      }
     });
 
     const rows = Array.from(map.values());
-    rows.sort((a, b) => {
-      const cmp = b.displayDate.localeCompare(a.displayDate);
-      if (cmp !== 0) return cmp;
-      return a.workerCode - b.workerCode;
-    });
+    rows.sort((a, b) => b.lastPunchTime.localeCompare(a.lastPunchTime));
     return rows;
-  }, [filteredRecords]);
+  }, [filteredRecords, leaves]);
 
   // Pagination calculation based on grouped daily rows
   const totalPages = Math.max(1, Math.ceil(groupedRows.length / pageSize));

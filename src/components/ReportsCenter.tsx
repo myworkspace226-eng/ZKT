@@ -27,7 +27,7 @@ import {
   User, 
   SlidersHorizontal 
 } from 'lucide-react';
-import { Worker, AttendanceRecord, ShiftRule, AbsenceCategory, GatePass, Device, FactorySettings } from '../types';
+import { Worker, AttendanceRecord, ShiftRule, AbsenceCategory, GatePass, Device, FactorySettings, LeaveRecord, OfficialHoliday } from '../types';
 import { 
   exportToExcel, 
   exportStyledExcel, 
@@ -49,6 +49,8 @@ interface ReportsCenterProps {
   factoryName?: string;
   absenceOverrides?: Record<string, { category: AbsenceCategory; note: string }>;
   onUpdateAbsenceOverrides?: (overrides: Record<string, { category: AbsenceCategory; note: string }>) => void;
+  leaves?: LeaveRecord[];
+  officialHolidays?: OfficialHoliday[];
   onSyncDevices?: () => void;
   isSyncing?: boolean;
 }
@@ -63,6 +65,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   factoryName = 'مصنع الملابس الجاهزة',
   absenceOverrides = {},
   onUpdateAbsenceOverrides,
+  leaves = [],
+  officialHolidays = [],
   onSyncDevices,
   isSyncing = false,
 }) => {
@@ -204,8 +208,16 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         return !direct && !alias;
       })
       .map((w) => {
-        const override = absenceOverrides[`${selectedDay}_${w.code}`] || absenceOverrides[String(w.code)] || absenceOverrides[w.code];
+        const dayKey = `${selectedDay}_${w.code}`;
+        const override = absenceOverrides[dayKey];
         const hasGatePass = gatePasses.find((g) => Number(g.workerCode) === Number(w.code) && g.date === selectedDay);
+        const workerLeave = leaves.find((l) => 
+          Number(l.workerCode) === Number(w.code) && (
+            (l.startDate && l.endDate && selectedDay >= l.startDate && selectedDay <= l.endDate) ||
+            (l.specificDates && l.specificDates.includes(selectedDay))
+          )
+        );
+        const officialHoliday = officialHolidays.find((h) => h.date === selectedDay);
 
         let defaultCat: AbsenceCategory = 'unexcused';
         let defaultNote = '';
@@ -213,6 +225,12 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         if (override) {
           defaultCat = override.category;
           defaultNote = override.note;
+        } else if (workerLeave) {
+          defaultCat = workerLeave.leaveType;
+          defaultNote = workerLeave.note ? `إجازة مسجلة: ${workerLeave.note}` : 'إجازة معتمدة مسجلة بالنظام';
+        } else if (officialHoliday) {
+          defaultCat = 'official_pass';
+          defaultNote = `عطلة رسمية: ${officialHoliday.name}`;
         } else if (hasGatePass) {
           defaultCat = 'official_pass';
           defaultNote = `تصريح: ${hasGatePass.reasonText}`;
@@ -224,18 +242,14 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           note: defaultNote,
         };
       });
-  }, [activeWorkers, presentWorkerCodes, absenceOverrides, gatePasses, selectedDay]);
+  }, [activeWorkers, presentWorkerCodes, absenceOverrides, gatePasses, leaves, officialHolidays, selectedDay]);
 
   const handleUpdateWorkerAbsence = (workerCode: number, category: AbsenceCategory, note?: string) => {
     const dayKey = `${selectedDay}_${workerCode}`;
-    const existing = absenceOverrides[dayKey] || absenceOverrides[String(workerCode)] || absenceOverrides[workerCode];
+    const existing = absenceOverrides[dayKey];
     const updated = {
       ...absenceOverrides,
       [dayKey]: {
-        category,
-        note: note !== undefined ? note : (existing?.note || ''),
-      },
-      [workerCode]: {
         category,
         note: note !== undefined ? note : (existing?.note || ''),
       },
@@ -247,14 +261,10 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
   const handleUpdateWorkerNote = (workerCode: number, note: string) => {
     const dayKey = `${selectedDay}_${workerCode}`;
-    const existing = absenceOverrides[dayKey] || absenceOverrides[String(workerCode)] || absenceOverrides[workerCode];
+    const existing = absenceOverrides[dayKey];
     const updated = {
       ...absenceOverrides,
       [dayKey]: {
-        category: existing?.category || 'unexcused',
-        note,
-      },
-      [workerCode]: {
         category: existing?.category || 'unexcused',
         note,
       },
@@ -471,8 +481,16 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
       const dayPunches = punchesByDate.get(dateStr) || [];
       const checkInPunch = dayPunches.find((p) => p.resolvedState === 'IN') || dayPunches[0];
-      const checkOutPunch = dayPunches.length > 1 ? dayPunches[dayPunches.length - 1] : undefined;
+      const outPunches = dayPunches.filter((p) => p.resolvedState === 'OUT');
+      const checkOutPunch = outPunches.length > 0 ? outPunches[outPunches.length - 1] : undefined;
       const dayPass = passesByDate.get(dateStr);
+      const dayLeave = leaves.find((l) => 
+        Number(l.workerCode) === Number(selectedDossierWorker.code) && (
+          (l.startDate && l.endDate && dateStr >= l.startDate && dateStr <= l.endDate) ||
+          (l.specificDates && l.specificDates.includes(dateStr))
+        )
+      );
+      const dayHoliday = officialHolidays.find((h) => h.date === dateStr);
 
       let status = 'غائب';
       let lateMins = 0;
@@ -513,6 +531,12 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             notes = 'انصراف طبيعي ضمن فترة السماح (4:30 - 4:45)';
           }
         }
+      } else if (dayLeave) {
+        status = `إجازة (${dayLeave.leaveType === 'excused_annual' ? 'اعتيادية' : dayLeave.leaveType === 'excused_casual' ? 'عارضة' : dayLeave.leaveType === 'medical' ? 'مرضية' : 'إذن رسمي'})`;
+        notes = dayLeave.note ? `إجازة معتمدة: ${dayLeave.note}` : 'إجازة معتمدة مسجلة بالنظام';
+      } else if (dayHoliday) {
+        status = `عطلة رسمية (${dayHoliday.name})`;
+        notes = `عطلة رسمية: ${dayHoliday.name}`;
       } else if (dayPass) {
         status = 'بتصريح خروج';
         notes = `${dayPass.reasonText} (${dayPass.exitTime} - ${dayPass.returnTime || 'نهاية اليوم'})`;
@@ -536,7 +560,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     }
 
     return list;
-  }, [selectedDossierWorker, startDate, endDate, dossierWorkerRecords, dossierWorkerPasses, shifts, otDepartureGrace]);
+  }, [selectedDossierWorker, startDate, endDate, dossierWorkerRecords, dossierWorkerPasses, shifts, otDepartureGrace, leaves, officialHolidays]);
 
   // Totals for dossier (Hours and Minutes only - Zero financial metrics)
   const dossierSummary = useMemo(() => {
@@ -869,9 +893,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           <div>
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span>مركز التقارير وتحليلات الحضور</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">
-                V 5.6.2
-              </span>
             </h2>
             <p className="text-[11px] text-slate-400">
               تقارير الغياب اليومي، وسجل الحضور والغياب، والساعات الإضافية
@@ -1230,8 +1251,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                       <th className="py-2.5 px-3 font-semibold">القسم</th>
                       <th className="py-2.5 px-3 font-semibold">خط الإنتاج</th>
                       <th className="py-2.5 px-3 font-semibold">الوظيفة</th>
-                      <th className="py-2.5 px-3 font-semibold text-center">تصنيف الغياب</th>
-                      <th className="py-2.5 px-3 font-semibold">ملاحظات والتصريح</th>
+                      <th className="py-2.5 px-3 font-semibold text-center">سبب الغياب</th>
+                      <th className="py-2.5 px-3 font-semibold">ملاحظات</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-sans">
