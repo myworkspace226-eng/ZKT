@@ -107,7 +107,6 @@ export const INITIAL_SHIFT_RULES: ShiftRule[] = [
     earlyArrivalWindowStart: '06:30',
     generalGraceMinutes: 15,
     overnightEndThreshold: '07:00',
-    fridayMultiplier: 2.0,
   },
   {
     id: 'bangladeshi',
@@ -120,7 +119,6 @@ export const INITIAL_SHIFT_RULES: ShiftRule[] = [
     earlyArrivalWindowStart: '06:30',
     generalGraceMinutes: 15,
     overnightEndThreshold: '07:00',
-    fridayMultiplier: 2.0,
   },
 ];
 

@@ -54,6 +54,7 @@ export interface AttendanceRecord {
   timestamp: string; // ISO
   displayTime: string;
   displayDate: string;
+  workDate?: string;
   rawState: 'IN' | 'OUT';
   resolvedState: 'IN' | 'OUT';
   deviceId: number;
@@ -73,7 +74,7 @@ export interface AttendanceRecord {
   lateMinutes?: number;
   isMissedPunch?: boolean;
   isAmbiguousSinglePunch?: boolean;
-  ambiguousResolution?: 'pending' | 'temporary_pass' | 'final_out' | 'late_in' | 'duplicate';
+  ambiguousResolution?: 'pending' | 'temporary_pass' | 'out_with_pass' | 'final_out' | 'late_in' | 'duplicate';
   linkedPermissionId?: string;
   expectedReturnTime?: string;
   isReturnFromPass?: boolean;
@@ -83,8 +84,6 @@ export interface AttendanceRecord {
   isEarlyDeparture?: boolean;
   earlyDepartureMinutes?: number;
   earlyDepartureReason?: string;
-  fridayMultiplier?: number;
-  isFridayDouble?: boolean;
 }
 
 export interface ShiftRule {
@@ -98,7 +97,6 @@ export interface ShiftRule {
   earlyArrivalWindowStart: string; // "06:30"
   generalGraceMinutes: number; // 15
   overnightEndThreshold: string; // "07:00"
-  fridayMultiplier: number; // 2.0
 }
 
 export type AbsenceCategory = 
@@ -156,7 +154,6 @@ export interface FactorySettings {
   ambiguousWindowStart?: string; // "12:00"
   ambiguousWindowEnd?: string; // "15:59"
   afternoonWindowStart?: string; // "16:00"
-  fridayMultiplier?: number;
   regularOvertimeMultiplier?: number;
   nightOvertimeMultiplier?: number;
   defaultHourlyRate?: number;
@@ -173,7 +170,7 @@ export interface HRAuditRecord {
   recordId?: string;
   recordDate: string;
   recordTime: string;
-  actionType: 'OVERRIDE_OUT_TO_IN' | 'RESOLVE_MISSING_IN' | 'RESOLVE_AMBIGUOUS_PASS' | 'RESOLVE_AMBIGUOUS_OUT' | 'RESOLVE_AMBIGUOUS_LATE_IN' | 'RESOLVE_AMBIGUOUS_DUPLICATE' | 'MANUAL_EDIT' | 'ADD_MANUAL_PUNCH' | 'DELETE_PUNCH';
+  actionType: 'OVERRIDE_OUT_TO_IN' | 'RESOLVE_MISSING_IN' | 'RESOLVE_AMBIGUOUS_PASS' | 'RESOLVE_AMBIGUOUS_OUT_WITH_PASS' | 'RESOLVE_AMBIGUOUS_OUT' | 'RESOLVE_AMBIGUOUS_LATE_IN' | 'RESOLVE_AMBIGUOUS_DUPLICATE' | 'MANUAL_EDIT' | 'ADD_MANUAL_PUNCH' | 'DELETE_PUNCH';
   oldValue: string;
   newValue: string;
   reason: string;

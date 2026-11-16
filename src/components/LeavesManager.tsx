@@ -119,14 +119,37 @@ export const LeavesManager: React.FC<LeavesManagerProps> = ({
     });
   }, [leaves, selectedTypeFilter, searchQuery]);
 
-  // Calculate days difference for continuous dates
+  const holidayDatesSet = useMemo(() => {
+    return new Set(officialHolidays.map((h) => h.date));
+  }, [officialHolidays]);
+
+  // Calculate actual working leave days between startDate and endDate (excluding Fridays & officialHolidays)
+  const calculateActualLeaveDays = (startStr: string, endStr: string): number => {
+    if (!startStr || !endStr || startStr > endStr) return 0;
+    const cur = new Date(`${startStr}T12:00:00`);
+    const end = new Date(`${endStr}T12:00:00`);
+    if (isNaN(cur.getTime()) || isNaN(end.getTime())) return 0;
+
+    let actualDays = 0;
+    while (cur <= end) {
+      const dow = cur.getDay();
+      const y = cur.getFullYear();
+      const m = String(cur.getMonth() + 1).padStart(2, '0');
+      const d = String(cur.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${d}`;
+
+      if (dow !== 5 && !holidayDatesSet.has(dateStr)) {
+        actualDays++;
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+    return actualDays;
+  };
+
+  // Calculate actual leave days for continuous dates in modal
   const continuousDaysCount = useMemo(() => {
-    if (!startDate || !endDate) return 0;
-    const s = new Date(startDate);
-    const e = new Date(endDate);
-    const diff = Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-    return diff > 0 ? diff : 0;
-  }, [startDate, endDate]);
+    return calculateActualLeaveDays(startDate, endDate);
+  }, [startDate, endDate, holidayDatesSet]);
 
   const handleOpenAddModal = () => {
     setSelectedWorkerCode(workers.length > 0 ? workers[0].code : '');
@@ -419,7 +442,7 @@ export const LeavesManager: React.FC<LeavesManagerProps> = ({
                               <span>{l.endDate}</span>
                             </div>
                             <span className="text-[10px] text-blue-400 font-medium">
-                              فترة متصلة ({Math.round((new Date(l.endDate).getTime() - new Date(l.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1} يوم)
+                              فترة متصلة ({calculateActualLeaveDays(l.startDate, l.endDate)} يوم)
                             </span>
                           </div>
                         ) : l.specificDates && l.specificDates.length > 0 ? (

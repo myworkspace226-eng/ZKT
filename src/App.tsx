@@ -187,7 +187,10 @@ export default function App() {
     setAuditLog((prev) => [record, ...prev]);
   };
 
-  // Leaves and Official Holidays Management State (V 5.7.0)
+  // Prefill state when navigating from AttendanceLogs Edit Modal to create a new GatePass (V5.8.0)
+  const [gatePassPrefill, setGatePassPrefill] = useState<{ workerCode: number; date: string; exitTime?: string } | null>(null);
+
+  // Leaves and Official Holidays Management State (V 5.7.1)
   const [leaves, setLeaves] = useState<LeaveRecord[]>(() => {
     try {
       const saved = localStorage.getItem('zkt_leaves_v1');
@@ -254,7 +257,7 @@ export default function App() {
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 5.7.0', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 5.8.0', 
       type: 'info' 
     }
   ]);
@@ -898,7 +901,7 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '5.7.0',
+      version: '5.8.0',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
@@ -1123,6 +1126,11 @@ export default function App() {
                 onDeleteRecord={handleDeleteRecord}
                 onAddAuditRecord={handleAddAuditRecord}
                 onAddGatePass={handleAddGatePass}
+                onUpdateGatePass={handleUpdateGatePass}
+                onNavigateToCreateGatePass={(prefill) => {
+                  setGatePassPrefill(prefill);
+                  setActiveTab('gatepasses');
+                }}
               />
             )}
 
@@ -1145,6 +1153,8 @@ export default function App() {
                 onCompleteGatePass={handleCompleteGatePass}
                 onUpdateGatePass={handleUpdateGatePass}
                 onDeleteGatePass={handleDeleteGatePass}
+                prefillData={gatePassPrefill}
+                onClearPrefill={() => setGatePassPrefill(null)}
               />
             )}
 

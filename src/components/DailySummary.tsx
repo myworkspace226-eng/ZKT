@@ -75,9 +75,9 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
     const workerMap = new Map<number, Worker>();
     activeWorkers.forEach((w) => workerMap.set(w.code, w));
 
-    // Records for the chosen date
+    // Records for the chosen date (using workDate as single source of truth for work shifts)
     const dayRecords = processedAttendanceRecords.filter(
-      (r) => !r.isDuplicateIgnored && r.displayDate === selectedDate
+      (r) => !r.isDuplicateIgnored && (r.workDate || r.displayDate) === selectedDate
     );
 
     // Gate passes for the chosen date
@@ -109,7 +109,6 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
       earlyArrivalWindowStart: '06:30',
       generalGraceMinutes: 15,
       overnightEndThreshold: '07:00',
-      fridayMultiplier: 2.0,
     };
 
     let presentCount = 0;
@@ -137,7 +136,6 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
           inPunch,
           outPunch,
           workerShift,
-          false,
           settings?.overtimeGraceMinutes ?? 30
         );
 

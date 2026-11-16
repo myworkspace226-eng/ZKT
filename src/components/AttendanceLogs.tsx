@@ -77,6 +77,8 @@ interface AttendanceLogsProps {
   onDeleteRecord?: (id: string) => void;
   onAddAuditRecord?: (record: HRAuditRecord) => void;
   onAddGatePass?: (gatePass: GatePass) => void;
+  onUpdateGatePass?: (gatePass: GatePass) => void;
+  onNavigateToCreateGatePass?: (prefill: { workerCode: number; date: string; exitTime?: string }) => void;
 }
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom';
@@ -97,6 +99,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   onDeleteRecord,
   onAddAuditRecord,
   onAddGatePass,
+  onUpdateGatePass,
+  onNavigateToCreateGatePass,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
@@ -105,7 +109,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
   // Ambiguous Punch Resolution Modal State (Point 4 & Bug 2)
   const [resolvingRecord, setResolvingRecord] = useState<AttendanceRecord | null>(null);
-  const [resolutionChoice, setResolutionChoice] = useState<'temporary_pass' | 'final_out' | 'late_in' | 'duplicate'>('temporary_pass');
+  const [resolutionChoice, setResolutionChoice] = useState<'temporary_pass' | 'out_with_pass' | 'final_out' | 'late_in' | 'duplicate'>('temporary_pass');
+  const [selectedAmbiguousPassId, setSelectedAmbiguousPassId] = useState<string>('');
   const [expectedReturnTime, setExpectedReturnTime] = useState<string>('14:30');
   const [passReason, setPassReason] = useState<string>('تصريح شخصي معتمد');
 
@@ -130,6 +135,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   const [editLateMinutes, setEditLateMinutes] = useState<number>(0);
   const [editOvertimeHours, setEditOvertimeHours] = useState<number>(0);
   const [editNote, setEditNote] = useState<string>('');
+  const [selectedLinkedPassId, setSelectedLinkedPassId] = useState<string>('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   
   // Multi-punch selection modal for consolidated daily rows (Task 9)
@@ -167,6 +173,29 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     workers.forEach((w) => map.set(w.code, w));
     return map;
   }, [workers]);
+
+  // Matching gate passes for Ambiguous Resolution Modal (Stage 3)
+  const matchingAmbiguousPasses = useMemo(() => {
+    if (!resolvingRecord) return [];
+    const targetDate = resolvingRecord.workDate || resolvingRecord.displayDate;
+    return gatePasses.filter(
+      (gp) =>
+        Number(gp.workerCode) === Number(resolvingRecord.workerCode) &&
+        (gp.date === targetDate || gp.date === resolvingRecord.displayDate) &&
+        (gp.status === 'active' || gp.status === 'completed')
+    );
+  }, [resolvingRecord, gatePasses]);
+
+  // Matching gate passes for Edit Modal retroactive linking (Stage 4)
+  const editMatchingPasses = useMemo(() => {
+    if (!editingRecord) return [];
+    return gatePasses.filter(
+      (gp) =>
+        Number(gp.workerCode) === Number(editWorkerCode) &&
+        gp.date === editDate &&
+        (gp.status === 'active' || gp.status === 'completed')
+    );
+  }, [editingRecord, gatePasses, editWorkerCode, editDate]);
 
   // Smart Attendance Processing (Dynamic Cooldown, 1st & Last Punch, Shift Reactivity, 3-zone Single Punch)
   const { smartRecords, detectedDuplicatesCount, missedPunchesCount, ambiguousCount, missingInCount } = useMemo(() => {
@@ -234,14 +263,15 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       // 1. Deduplication filter (< 60 minutes)
       if (filterDuplicates && rec.isDuplicateIgnored) return false;
 
-      // 2. Date presets
-      if (datePreset === 'today' && rec.displayDate !== today) return false;
-      if (datePreset === 'yesterday' && rec.displayDate !== yesterdayDate) return false;
-      if (datePreset === 'week' && rec.displayDate < sevenDaysAgo) return false;
-      if (datePreset === 'month' && rec.displayDate < monthStart) return false;
+      // 2. Date presets (workDate is single source of truth for work shifts)
+      const recordDate = rec.workDate || rec.displayDate;
+      if (datePreset === 'today' && recordDate !== today) return false;
+      if (datePreset === 'yesterday' && recordDate !== yesterdayDate) return false;
+      if (datePreset === 'week' && recordDate < sevenDaysAgo) return false;
+      if (datePreset === 'month' && recordDate < monthStart) return false;
       if (datePreset === 'custom') {
-        if (customFromDate && rec.displayDate < customFromDate) return false;
-        if (customToDate && rec.displayDate > customToDate) return false;
+        if (customFromDate && recordDate < customFromDate) return false;
+        if (customToDate && recordDate > customToDate) return false;
       }
 
       // 3. Department filter
@@ -295,7 +325,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const map = new Map<string, GroupedAttendanceRow>();
 
     filteredRecords.forEach((rec) => {
-      const key = `${rec.workerCode}_${rec.displayDate}`;
+      const workDay = rec.workDate || rec.displayDate;
+      const key = `${rec.workerCode}_${workDay}`;
       const recPunchTime = rec.timestamp || `${rec.displayDate}T${rec.displayTime}:00`;
       let row = map.get(key);
       if (!row) {
@@ -304,7 +335,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           workerCode: rec.workerCode,
           workerName: rec.workerName,
           department: rec.department,
-          displayDate: rec.displayDate,
+          displayDate: workDay,
           lastPunchTime: recPunchTime,
           allPunches: [],
           hasMissingIn: false,
@@ -483,8 +514,6 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       isOvertime,
       overtimeHours,
       lateMinutes,
-      isFridayDouble: false,
-      fridayMultiplier: undefined,
       manualNote: autoNote,
       manualEditor: manualEditor,
     };
@@ -526,6 +555,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     setEditLateMinutes(rec.lateMinutes || 0);
     setEditOvertimeHours(rec.overtimeHours || 0);
     setEditNote(rec.manualNote || '');
+    setSelectedLinkedPassId(rec.linkedPermissionId || '');
   };
 
   const handleSaveEdit = (e: React.FormEvent) => {
@@ -536,6 +566,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
     const oldDesc = `${editingRecord.resolvedState === 'IN' ? 'حضور' : 'انصراف'} (${editingRecord.displayTime})`;
     const newDesc = `${editState === 'IN' ? 'حضور' : 'انصراف'} (${editTime})`;
+    const isLinkedToPass = Boolean(selectedLinkedPassId);
 
     const updatedRecord: AttendanceRecord = {
       ...editingRecord,
@@ -555,14 +586,36 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       isMissedPunch: false,
       missingInPunch: false,
       isDuplicateIgnored: false,
+      linkedPermissionId: selectedLinkedPassId || undefined,
       lateMinutes: editState === 'IN' && editLateMinutes > 0 ? editLateMinutes : undefined,
-      overtimeHours: editOvertimeHours > 0 ? editOvertimeHours : undefined,
-      isOvertime: editOvertimeHours > 0,
-      manualNote: editNote.trim() ? editNote.trim() : 'تم التعديل والاعتماد يدوياً (HR Override)',
+      overtimeHours: isLinkedToPass ? undefined : (editOvertimeHours > 0 ? editOvertimeHours : undefined),
+      isOvertime: isLinkedToPass ? false : editOvertimeHours > 0,
+      ...(isLinkedToPass && editState === 'OUT'
+        ? {
+            isEarlyDeparture: false,
+            earlyDepartureMinutes: 0,
+            earlyDepartureReason: undefined,
+          }
+        : {}),
+      manualNote: isLinkedToPass
+        ? 'انصراف بتصريح معتمد'
+        : (editNote.trim() ? editNote.trim() : 'تم التعديل والاعتماد يدوياً (HR Override)'),
     };
 
     if (onUpdateRecord) {
       onUpdateRecord(updatedRecord);
+    }
+
+    // Retroactive pass completion (Stage 4): complete linked gate pass with punch time
+    if (isLinkedToPass && onUpdateGatePass) {
+      const matchedPass = gatePasses.find((p) => p.id === selectedLinkedPassId);
+      if (matchedPass) {
+        onUpdateGatePass({
+          ...matchedPass,
+          status: 'completed',
+          returnTime: editTime ? editTime.slice(0, 5) : matchedPass.returnTime,
+        });
+      }
     }
 
     // Audit Log Entry (Point 7)
@@ -580,8 +633,10 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         recordTime: editTime,
         actionType: 'MANUAL_EDIT',
         oldValue: oldDesc,
-        newValue: newDesc,
-        reason: editNote.trim() || 'تعديل بيانات البصمة يدوياً',
+        newValue: isLinkedToPass ? `${newDesc} - انصراف بتصريح معتمد` : newDesc,
+        reason: isLinkedToPass
+          ? 'ربط حركة البصمة بتصريح معتمد وتعديلها يدوياً'
+          : (editNote.trim() || 'تعديل بيانات البصمة يدوياً'),
       });
     }
 
@@ -711,6 +766,56 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           oldValue: `بصمة في نافذة الغموض (${resolvingRecord.displayTime})`,
           newValue: `تصريح مؤقت حتى ${expectedReturnTime}`,
           reason: passReason,
+        });
+      }
+    } else if (resolutionChoice === 'out_with_pass') {
+      const selectedPass = matchingAmbiguousPasses.find((p) => p.id === selectedAmbiguousPassId) || matchingAmbiguousPasses[0];
+      if (!selectedPass) return;
+
+      const updated: AttendanceRecord = {
+        ...resolvingRecord,
+        rawState: 'OUT',
+        resolvedState: 'OUT',
+        isAmbiguousSinglePunch: false,
+        ambiguousResolution: 'out_with_pass',
+        linkedPermissionId: selectedPass.id,
+        isHROverride: true,
+        isManual: true,
+        isMissedPunch: false,
+        missedPunchReason: undefined,
+        isEarlyDeparture: false,
+        earlyDepartureMinutes: 0,
+        earlyDepartureReason: undefined,
+        isOvertime: false,
+        overtimeHours: 0,
+        manualNote: 'انصراف بتصريح معتمد',
+      };
+      onUpdateRecord(updated);
+
+      if (onUpdateGatePass) {
+        onUpdateGatePass({
+          ...selectedPass,
+          status: 'completed',
+          returnTime: resolvingRecord.displayTime.slice(0, 5),
+        });
+      }
+
+      if (onAddAuditRecord) {
+        onAddAuditRecord({
+          id: `audit-${Date.now()}`,
+          timestamp: nowIso,
+          displayTime: curTime,
+          displayDate: curDate,
+          modifiedBy: 'مسؤول الموارد البشرية',
+          workerCode: resolvingRecord.workerCode,
+          workerName: workerName,
+          recordId: resolvingRecord.id,
+          recordDate: resolvingRecord.displayDate,
+          recordTime: resolvingRecord.displayTime,
+          actionType: 'RESOLVE_AMBIGUOUS_OUT_WITH_PASS',
+          oldValue: `بصمة في نافذة الغموض (${resolvingRecord.displayTime})`,
+          newValue: `انصراف بتصريح معتمد (${selectedPass.reasonText})`,
+          reason: `ربط البصمة بتصريح #${selectedPass.id} واعتمادها كانصراف بتصريح`,
         });
       }
     } else if (resolutionChoice === 'late_in') {
@@ -1110,8 +1215,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
           <option value="IN">حضور فقط</option>
           <option value="OUT">انصراف فقط</option>
           <option value="AMBIGUOUS">بصمات غامضة تحتاج قرار HR ({ambiguousCount})</option>
-          <option value="MISSING_IN">بصمات حضور ناقصة ({missingInCount})</option>
-          <option value="MISSED">بصمات ناقصة ({missedPunchesCount})</option>
+          <option value="MISSING_IN">تسوية حضور مطلوبة ({missingInCount})</option>
+          <option value="MISSED">بصمات تحتاج تسوية ({missedPunchesCount})</option>
           <option value="HR_OVERRIDE">معتمد ومعدل يدوياً (HR)</option>
         </select>
 
@@ -1199,7 +1304,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                           <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                             <span className="text-[10px] px-2 py-0.5 rounded bg-rose-600 text-white font-sans font-bold flex items-center gap-1 border border-rose-700 animate-pulse">
                               <AlertCircle className="w-3 h-3" />
-                              <span>بصمة حضور ناقصة (Missing IN)</span>
+                              <span>تسوية حضور مطلوبة</span>
                             </span>
                             <button
                               onClick={() => {
@@ -1226,8 +1331,17 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                             {onUpdateRecord && (
                               <button
                                 onClick={() => {
-                                  setResolvingRecord(row.ambiguousRecord!);
-                                  setResolutionChoice(row.ambiguousRecord!.hasMorningIn ? 'duplicate' : 'temporary_pass');
+                                  const amb = row.ambiguousRecord!;
+                                  const ambDate = amb.workDate || amb.displayDate;
+                                  const matched = gatePasses.filter(
+                                    (gp) =>
+                                      Number(gp.workerCode) === Number(amb.workerCode) &&
+                                      (gp.date === ambDate || gp.date === amb.displayDate) &&
+                                      (gp.status === 'active' || gp.status === 'completed')
+                                  );
+                                  setResolvingRecord(amb);
+                                  setSelectedAmbiguousPassId(matched[0]?.id || '');
+                                  setResolutionChoice(amb.hasMorningIn ? 'duplicate' : 'temporary_pass');
                                   setExpectedReturnTime('14:30');
                                   setPassReason('تصريح شخصي معتمد');
                                 }}
@@ -1597,6 +1711,46 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 </div>
               </div>
 
+              {/* Stage 4: Retroactive Gate Pass Linking Section */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-slate-300 font-medium">ربط بتصريح (Link to Pass):</label>
+                  {onNavigateToCreateGatePass && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingRecord(null);
+                        onNavigateToCreateGatePass({
+                          workerCode: editWorkerCode,
+                          date: editDate,
+                          exitTime: editTime ? editTime.slice(0, 5) : '12:00',
+                        });
+                      }}
+                      className="text-[11px] px-2.5 py-1 rounded bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 font-medium transition-colors cursor-pointer"
+                    >
+                      + الذهاب لإنشاء تصريح جديد
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={selectedLinkedPassId}
+                  onChange={(e) => setSelectedLinkedPassId(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white cursor-pointer"
+                >
+                  <option value="">-- بدون ربط بتصريح --</option>
+                  {editMatchingPasses.map((gp) => (
+                    <option key={gp.id} value={gp.id}>
+                      {gp.reasonText} ({gp.exitTime}{gp.returnTime ? ` - ${gp.returnTime}` : ''}) [{gp.status === 'active' ? 'ساري' : 'مكتمل'}]
+                    </option>
+                  ))}
+                </select>
+                {editMatchingPasses.length === 0 && (
+                  <p className="text-[11px] text-slate-500">
+                    لا توجد تصاريح سارية أو مكتملة مسجلة لهذا العامل بتاريخ {editDate}. يمكنك الضغط على "الذهاب لإنشاء تصريح جديد".
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-slate-300 block mb-1">التاريخ:</label>
@@ -1786,7 +1940,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
               <p>البصمة دي تصريح مؤقت (بعودة) ولا انصراف نهائي؟</p>
             </div>
 
-            {/* Selection Options */}
+              {/* Selection Options */}
             <div className="space-y-2.5 text-xs">
               <label 
                 onClick={() => setResolutionChoice('temporary_pass')}
@@ -1804,7 +1958,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   className="mt-0.5 text-amber-500 focus:ring-amber-500"
                 />
                 <div className="space-y-1">
-                  <span className="font-bold text-sm block text-amber-300">1. تصريح خروج مؤقت (بعودة)</span>
+                  <span className="font-bold text-sm block text-amber-300">1. تصريح خروج مؤقت (Temporary Pass)</span>
                   <span className="text-[11px] text-slate-400 block">
                     تسجيل خروج مؤقت وإصدار تصريح، واستثناء بصمة العودة من قاعدة التكرار لتسجيلها كـ "حضور بعد تصريح".
                   </span>
@@ -1837,6 +1991,61 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                 </div>
               )}
 
+              {/* Stage 3: Out with Pass Option (only when matching gate passes exist) */}
+              {matchingAmbiguousPasses.length > 0 && (
+                <>
+                  <label 
+                    onClick={() => {
+                      setResolutionChoice('out_with_pass');
+                      if (!selectedAmbiguousPassId && matchingAmbiguousPasses[0]) {
+                        setSelectedAmbiguousPassId(matchingAmbiguousPasses[0].id);
+                      }
+                    }}
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                      resolutionChoice === 'out_with_pass' 
+                        ? 'bg-cyan-950/40 border-cyan-500 text-white' 
+                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="ambiguous_choice"
+                      checked={resolutionChoice === 'out_with_pass'}
+                      onChange={() => {
+                        setResolutionChoice('out_with_pass');
+                        if (!selectedAmbiguousPassId && matchingAmbiguousPasses[0]) {
+                          setSelectedAmbiguousPassId(matchingAmbiguousPasses[0].id);
+                        }
+                      }}
+                      className="mt-0.5 text-cyan-500 focus:ring-cyan-500"
+                    />
+                    <div className="space-y-1">
+                      <span className="font-bold text-sm block text-cyan-300">انصراف بتصريح (Out with Pass)</span>
+                      <span className="text-[11px] text-slate-400 block">
+                        ربط هذه البصمة بتصريح مسجل للعامل في نفس اليوم وإغلاق التصريح تلقائياً دون خصم انصراف مبكر.
+                      </span>
+                    </div>
+                  </label>
+
+                  {resolutionChoice === 'out_with_pass' && (
+                    <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2 text-xs mr-4">
+                      <label className="text-slate-300 block font-medium">اختر التصريح المرتبط:</label>
+                      <select
+                        value={selectedAmbiguousPassId}
+                        onChange={(e) => setSelectedAmbiguousPassId(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white cursor-pointer"
+                      >
+                        {matchingAmbiguousPasses.map((gp) => (
+                          <option key={gp.id} value={gp.id}>
+                            {gp.reasonText} ({gp.exitTime}{gp.returnTime ? ` - ${gp.returnTime}` : ''}) [{gp.status === 'active' ? 'ساري' : 'مكتمل'}]
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </>
+              )}
+
               <label 
                 onClick={() => setResolutionChoice('final_out')}
                 className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
@@ -1853,7 +2062,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                   className="mt-0.5 text-blue-600 focus:ring-blue-500"
                 />
                 <div className="space-y-1">
-                  <span className="font-bold text-sm block text-blue-300">2. انصراف نهائي</span>
+                  <span className="font-bold text-sm block text-blue-300">انصراف نهائي (Final OUT)</span>
                   <span className="text-[11px] text-slate-400 block">
                     تسجيل انصراف نهائي للعامل وإغلاق اليوم بدون انتظار عودة، واحتساب الانصراف المبكر إن وُجد.
                   </span>
@@ -1878,7 +2087,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                     className="mt-0.5 text-rose-500 focus:ring-rose-500"
                   />
                   <div className="space-y-1">
-                    <span className="font-bold text-sm block text-rose-300">3. بصمة مكررة / إضافية (Duplicate)</span>
+                    <span className="font-bold text-sm block text-rose-300">بصمة إضافية / مكررة (Duplicate)</span>
                     <span className="text-[11px] text-slate-400 block">
                       تم رصد بصمة حضور صباحية سابقة لنفس العامل اليوم، سيتم استبعاد هذه البصمة كبصمة مكررة/إضافية مع الحفاظ عليها في السجل.
                     </span>
@@ -1901,7 +2110,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                     className="mt-0.5 text-emerald-600 focus:ring-emerald-500"
                   />
                   <div className="space-y-1">
-                    <span className="font-bold text-sm block text-emerald-300">3. اعتماد كحضور متأخر (Late IN)</span>
+                    <span className="font-bold text-sm block text-emerald-300">تسوية حضور (Late IN)</span>
                     <span className="text-[11px] text-slate-400 block">
                       اعتماد البصمة كـ حضور (IN)، ويحسب النظام التأخير آلياً من موعد بداية الوردية ({settings?.standardShiftStart || '08:00'} صباحاً) حتى وقت البصمة ({resolvingRecord.displayTime}).
                     </span>
@@ -2086,12 +2295,16 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                       'اسم العامل': item.workerName,
                       'نوع الإجراء': item.actionType === 'RESOLVE_AMBIGUOUS_PASS'
                         ? 'اعتماد تصريح مؤقت'
+                        : item.actionType === 'RESOLVE_AMBIGUOUS_OUT_WITH_PASS'
+                        ? 'انصراف بتصريح معتمد'
                         : item.actionType === 'RESOLVE_AMBIGUOUS_OUT'
                         ? 'اعتماد انصراف نهائي'
                         : item.actionType === 'RESOLVE_AMBIGUOUS_LATE_IN'
-                        ? 'اعتماد حضور متأخر'
+                        ? 'تسوية حضور (Late IN)'
+                        : item.actionType === 'RESOLVE_AMBIGUOUS_DUPLICATE'
+                        ? 'بصمة إضافية / مكررة'
                         : (item.actionType === 'RESOLVE_MISSING_IN' || item.actionType === 'OVERRIDE_OUT_TO_IN')
-                        ? 'إضافة حضور صباحي مفقود'
+                        ? 'إضافة حضور صباحي'
                         : item.actionType === 'MANUAL_EDIT'
                         ? 'تعديل يدوي'
                         : item.actionType === 'ADD_MANUAL_PUNCH'
@@ -2162,17 +2375,25 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                                 <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
                                   تصريح مؤقت
                                 </span>
+                              ) : entry.actionType === 'RESOLVE_AMBIGUOUS_OUT_WITH_PASS' ? (
+                                <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold">
+                                  انصراف بتصريح
+                                </span>
                               ) : entry.actionType === 'RESOLVE_AMBIGUOUS_OUT' ? (
                                 <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-bold">
                                   انصراف نهائي
                                 </span>
                               ) : entry.actionType === 'RESOLVE_AMBIGUOUS_LATE_IN' ? (
                                 <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                                  حضور متأخر
+                                  تسوية حضور
+                                </span>
+                              ) : entry.actionType === 'RESOLVE_AMBIGUOUS_DUPLICATE' ? (
+                                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                                  بصمة مكررة
                                 </span>
                               ) : (entry.actionType === 'RESOLVE_MISSING_IN' || entry.actionType === 'OVERRIDE_OUT_TO_IN') ? (
                                 <span className="px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30 text-[10px] font-bold">
-                                  إضافة حضور صباحي مفقود
+                                  إضافة حضور صباحي
                                 </span>
                               ) : entry.actionType === 'ADD_MANUAL_PUNCH' ? (
                                 <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">

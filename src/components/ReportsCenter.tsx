@@ -117,6 +117,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     }
   }, [settings?.overtimeGraceMinutes]);
 
+  const overnightCutoffHour = settings?.overnightCutoffHour ?? 6;
+
   const handleSetPreset = (preset: 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'custom') => {
     setQuickPreset(preset);
     const now = new Date();
@@ -153,7 +155,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   const recordsOnSelectedDay = useMemo(() => {
     return attendanceRecords.filter((r) => {
       if (r.isDuplicateIgnored) return false;
-      const recDate = r.displayDate || (r.timestamp ? r.timestamp.slice(0, 10) : '');
+      const recDate = r.workDate || r.displayDate || (r.timestamp ? r.timestamp.slice(0, 10) : '');
       return recDate === selectedDay;
     });
   }, [attendanceRecords, selectedDay]);
@@ -185,8 +187,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         const outPunch = workerPunches.length > 1 ? workerPunches[workerPunches.length - 1] : undefined;
 
         const workerShift = shifts.find((s) => s.id === w.shiftId) || shifts[0];
-        const isFriday = new Date(`${selectedDay}T12:00:00`).getDay() === 5;
-        const perf = calculateDailyPerformance(w, inPunch, outPunch, workerShift, isFriday, otDepartureGrace);
+        const perf = calculateDailyPerformance(w, inPunch, outPunch, workerShift, otDepartureGrace);
 
         return {
           ...w,
@@ -433,7 +434,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   const dossierWorkerRecords = useMemo(() => {
     if (!selectedDossierWorker) return [];
     return attendanceRecords.filter((r) => {
-      const d = r.timestamp.slice(0, 10);
+      const d = r.workDate || r.displayDate || r.timestamp.slice(0, 10);
       return r.workerCode === selectedDossierWorker.code && d >= startDate && d <= endDate && !r.isDuplicateIgnored;
     });
   }, [selectedDossierWorker, attendanceRecords, startDate, endDate]);
@@ -459,7 +460,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     // Index worker records by date for O(1) lookup
     const punchesByDate = new Map<string, AttendanceRecord[]>();
     dossierWorkerRecords.forEach((r) => {
-      const d = r.timestamp.slice(0, 10);
+      const d = r.workDate || r.displayDate || r.timestamp.slice(0, 10);
       let arr = punchesByDate.get(d);
       if (!arr) {
         arr = [];
@@ -479,10 +480,39 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       const dayName = ARABIC_WEEKDAYS[dow] || '';
       const isFriday = dow === 5;
 
-      const dayPunches = punchesByDate.get(dateStr) || [];
-      const checkInPunch = dayPunches.find((p) => p.resolvedState === 'IN') || dayPunches[0];
-      const outPunches = dayPunches.filter((p) => p.resolvedState === 'OUT');
-      const checkOutPunch = outPunches.length > 0 ? outPunches[outPunches.length - 1] : undefined;
+      const rawDayPunches = punchesByDate.get(dateStr) || [];
+      const dayPunches = rawDayPunches.slice().sort((a, b) => {
+        const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
+        const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+        return keyA.localeCompare(keyB);
+      });
+
+      let checkInPunch: AttendanceRecord | undefined = undefined;
+      let checkOutPunch: AttendanceRecord | undefined = undefined;
+      let singlePunchNote = '';
+
+      if (dayPunches.length === 1) {
+        const single = dayPunches[0];
+        const [pHStr, pMStr] = (single.displayTime || '08:00').split(':');
+        const pMins = (parseInt(pHStr, 10) || 0) * 60 + (parseInt(pMStr, 10) || 0);
+        const isExplicitIn = (single.isHROverride && single.resolvedState === 'IN') || single.ambiguousResolution === 'late_in';
+
+        if (!isExplicitIn && (pMins >= 720 || pMins < overnightCutoffHour * 60)) {
+          checkOutPunch = single;
+          checkInPunch = undefined;
+          singlePunchNote = 'تسوية حضور مطلوبة';
+        } else {
+          checkInPunch = single;
+          checkOutPunch = undefined;
+          singlePunchNote = 'تسوية انصراف مطلوبة';
+        }
+      } else if (dayPunches.length > 1) {
+        const inPunches = dayPunches.filter((p) => p.resolvedState === 'IN');
+        checkInPunch = inPunches.length > 0 ? inPunches[0] : dayPunches[0];
+        const outPunches = dayPunches.filter((p) => p.resolvedState === 'OUT');
+        checkOutPunch = outPunches.length > 0 ? outPunches[outPunches.length - 1] : dayPunches[dayPunches.length - 1];
+      }
+
       const dayPass = passesByDate.get(dateStr);
       const dayLeave = leaves.find((l) => 
         Number(l.workerCode) === Number(selectedDossierWorker.code) && (
@@ -497,16 +527,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       let otHours = 0;
       let notes = '';
 
-      if (isFriday) {
-        if (dayPunches.length > 0) {
-          const fridayMult = shift?.fridayMultiplier || 2;
-          otHours = 8 * fridayMult;
-          status = `عمل يوم الجمعة (${fridayMult}x)`;
-          notes = `يوم جمعة مضاعف (${fridayMult}x) ${otHours} ساعة`;
-        } else {
-          status = 'عطلة أسبوعية (جمعة)';
-        }
-      } else if (dayPunches.length > 0) {
+      if (dayPunches.length > 0) {
         if (checkInPunch) {
           const punchTime = new Date(checkInPunch.timestamp);
           const [sH, sM] = shift.startTime.split(':').map(Number);
@@ -518,19 +539,33 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           } else {
             status = 'حاضر في الموعد';
           }
+        } else {
+          status = 'حاضر (تسوية حضور مطلوبة)';
         }
 
         if (checkOutPunch) {
           const outTime = new Date(checkOutPunch.timestamp);
-          const outMins = outTime.getHours() * 60 + outTime.getMinutes();
+          let outMins = outTime.getHours() * 60 + outTime.getMinutes();
+          const isOvernightOut =
+            outMins < overnightCutoffHour * 60 ||
+            (checkOutPunch.workDate && checkOutPunch.displayDate && checkOutPunch.workDate !== checkOutPunch.displayDate);
+          if (outMins < scheduledEndMinutes && isOvernightOut) {
+            outMins += 1440;
+          }
           const pastEnd = outMins - scheduledEndMinutes;
           if (pastEnd > otDepartureGrace) {
             otHours = Number((pastEnd / 60).toFixed(2));
             notes = `إضافي بعد انتهاء الوردية (${formatHoursAndMinutes(otHours)})`;
           } else if (pastEnd >= 0) {
-            notes = 'انصراف طبيعي ضمن فترة السماح (4:30 - 4:45)';
+            notes = `انصراف طبيعي ضمن فترة السماح (${otDepartureGrace} د)`;
           }
         }
+
+        if (singlePunchNote) {
+          notes = notes ? `${singlePunchNote} • ${notes}` : singlePunchNote;
+        }
+      } else if (isFriday) {
+        status = 'عطلة أسبوعية (جمعة)';
       } else if (dayLeave) {
         status = `إجازة (${dayLeave.leaveType === 'excused_annual' ? 'اعتيادية' : dayLeave.leaveType === 'excused_casual' ? 'عارضة' : dayLeave.leaveType === 'medical' ? 'مرضية' : 'إذن رسمي'})`;
         notes = dayLeave.note ? `إجازة معتمدة: ${dayLeave.note}` : 'إجازة معتمدة مسجلة بالنظام';
@@ -544,13 +579,14 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         status = 'غائب';
       }
 
+      const refPunch = checkInPunch || checkOutPunch;
       list.push({
         date: dateStr,
         dayName,
         isFriday,
         checkIn: checkInPunch ? checkInPunch.displayTime : '-',
         checkOut: checkOutPunch ? checkOutPunch.displayTime : (checkInPunch ? 'لم يبصم' : '-'),
-        machineName: checkInPunch ? (checkInPunch.deviceName || `ماكينة #${checkInPunch.deviceId}`) : '-',
+        machineName: refPunch ? (refPunch.deviceName || `ماكينة #${refPunch.deviceId}`) : '-',
         lateMinutes: lateMins,
         overtimeHours: otHours,
         gatePassInfo: dayPass ? `${dayPass.reasonText}` : '-',
@@ -560,13 +596,12 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     }
 
     return list;
-  }, [selectedDossierWorker, startDate, endDate, dossierWorkerRecords, dossierWorkerPasses, shifts, otDepartureGrace, leaves, officialHolidays]);
+  }, [selectedDossierWorker, startDate, endDate, dossierWorkerRecords, dossierWorkerPasses, shifts, otDepartureGrace, leaves, officialHolidays, overnightCutoffHour]);
 
   // Totals for dossier (Hours and Minutes only - Zero financial metrics)
   const dossierSummary = useMemo(() => {
     let presentDays = 0;
     let absentDays = 0;
-    let fridayWorkDays = 0;
     let totalLateMinutes = 0;
     let totalLateDays = 0;
     let totalOtHours = 0;
@@ -575,7 +610,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     dossierDailyLedger.forEach((row) => {
       if (row.status.startsWith('حاضر')) presentDays++;
       else if (row.status === 'غائب') absentDays++;
-      else if (row.status.startsWith('عمل يوم الجمعة')) fridayWorkDays++;
 
       if (row.lateMinutes > 0) {
         totalLateMinutes += row.lateMinutes;
@@ -587,7 +621,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     return {
       presentDays,
       absentDays,
-      fridayWorkDays,
       totalLateMinutes,
       totalLateDays,
       totalOtHours: Number(totalOtHours.toFixed(2)),
@@ -623,7 +656,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   // --------------------------------------------------------------------------
   const recordsInDateRange = useMemo(() => {
     return attendanceRecords.filter((r) => {
-      const recordDate = r.timestamp.slice(0, 10);
+      const recordDate = r.workDate || r.displayDate || r.timestamp.slice(0, 10);
       return recordDate >= startDate && recordDate <= endDate && !r.isDuplicateIgnored;
     });
   }, [attendanceRecords, startDate, endDate]);
@@ -649,7 +682,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       daysWorked: number;
       otDays: number;
       shiftOtHours: number;
-      fridayOtHours: number;
       totalOtHours: number;
       machineName: string;
     }>();
@@ -685,10 +717,11 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         dateMap = new Map();
         workerDateMap.set(r.workerCode, dateMap);
       }
-      let punches = dateMap.get(r.displayDate);
+      const recordDay = r.workDate || r.displayDate;
+      let punches = dateMap.get(recordDay);
       if (!punches) {
         punches = [];
-        dateMap.set(r.displayDate, punches);
+        dateMap.set(recordDay, punches);
       }
       punches.push(r);
     });
@@ -704,7 +737,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       let daysWorked = 0;
       let otDays = 0;
       let shiftOt = 0;
-      let fridayOt = 0;
 
       const primaryDevName = w.assignedDeviceIds && w.assignedDeviceIds.length > 0
         ? deviceMap.get(w.assignedDeviceIds[0])
@@ -712,11 +744,16 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       const machineName = primaryDevName || w.enrolledOnDeviceName || 'ماكينة غير محددة';
 
       if (workerDates) {
-        workerDates.forEach((punches, dateStr) => {
+        workerDates.forEach((rawPunches, dateStr) => {
           daysWorked++;
           const dow = getDayOfWeek(dateStr);
-          const isFriday = dow === 5;
           const dayName = ARABIC_WEEKDAYS[dow] || '';
+
+          const punches = rawPunches.slice().sort((a, b) => {
+            const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
+            const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+            return keyA.localeCompare(keyB);
+          });
 
           const checkIn = punches.find((p) => p.resolvedState === 'IN') || punches[0];
           const checkOut = punches.length > 1 ? punches[punches.length - 1] : undefined;
@@ -727,7 +764,13 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
           if (checkOut) {
             const outDate = new Date(checkOut.timestamp);
-            const outMinutes = outDate.getHours() * 60 + outDate.getMinutes();
+            let outMinutes = outDate.getHours() * 60 + outDate.getMinutes();
+            const isOvernightOut =
+              outMinutes < overnightCutoffHour * 60 ||
+              (checkOut.workDate && checkOut.displayDate && checkOut.workDate !== checkOut.displayDate);
+            if (outMinutes < scheduledEndMinutes && isOvernightOut) {
+              outMinutes += 1440;
+            }
             minutesPast = outMinutes - scheduledEndMinutes;
 
             if (minutesPast > otDepartureGrace) {
@@ -762,7 +805,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         });
       }
 
-      const totalOt = Number((shiftOt + fridayOt).toFixed(2));
+      const totalOt = Number(shiftOt.toFixed(2));
 
       if (totalOt > 0) {
         overallFactoryHours += totalOt;
@@ -774,7 +817,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         daysWorked,
         otDays,
         shiftOtHours: Number(shiftOt.toFixed(2)),
-        fridayOtHours: Number(fridayOt.toFixed(2)),
         totalOtHours: totalOt,
         machineName,
       });
@@ -795,7 +837,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       totalOtFactoryHours: Number(overallFactoryHours.toFixed(1)),
       otWorkersCount: activeOtWorkers,
     };
-  }, [recordsInDateRange, filteredOtWorkers, shifts, devices, otDepartureGrace]);
+  }, [recordsInDateRange, filteredOtWorkers, shifts, devices, otDepartureGrace, overnightCutoffHour]);
 
   const handleExportAdvancedOt = () => {
     if (otViewMode === 'summary') {
@@ -810,7 +852,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
         'أيام العمل': item.daysWorked,
         'أيام الإضافي': item.otDays,
         'إضافي الوردية (ساعة)': item.shiftOtHours,
-        'إضافي الجمعة والسهر (ساعة)': item.fridayOtHours,
         'إجمالي ساعات الأوفر تايم': item.totalOtHours,
         'المدة (ساعات ودقائق)': formatHoursAndMinutes(item.totalOtHours),
       }));
@@ -1699,7 +1740,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                         <th className="py-2.5 px-3 text-center">أيام العمل</th>
                         <th className="py-2.5 px-3 text-center">أيام الإضافي</th>
                         <th className="py-2.5 px-3 text-center">إضافي وردية</th>
-                        <th className="py-2.5 px-3 text-center">إضافي سهر/جمعة</th>
                         <th className="py-2.5 px-3 text-center">إجمالي الإضافي</th>
                       </tr>
                     </thead>
@@ -1715,7 +1755,6 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                           <td className="py-2 px-3 text-center text-slate-300">{item.daysWorked}</td>
                           <td className="py-2 px-3 text-center text-amber-400 font-bold">{item.otDays}</td>
                           <td className="py-2 px-3 text-center text-slate-300">{item.shiftOtHours} س</td>
-                          <td className="py-2 px-3 text-center text-indigo-400 font-bold">{item.fridayOtHours} س</td>
                           <td className="py-2 px-3 text-center text-amber-400 font-bold text-sm bg-amber-950/20">
                             {formatHoursAndMinutes(item.totalOtHours)}
                           </td>

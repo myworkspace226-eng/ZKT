@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   DoorOpen, 
   Plus, 
@@ -26,6 +26,8 @@ interface GatePassManagerProps {
   onCompleteGatePass: (id: string, returnTime: string) => void;
   onUpdateGatePass?: (gatePass: GatePass) => void;
   onDeleteGatePass?: (id: string) => void;
+  prefillData?: { workerCode: number; date: string; exitTime?: string } | null;
+  onClearPrefill?: () => void;
 }
 
 export const GatePassManager: React.FC<GatePassManagerProps> = ({
@@ -35,6 +37,8 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
   onCompleteGatePass,
   onUpdateGatePass,
   onDeleteGatePass,
+  prefillData,
+  onClearPrefill,
 }) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -47,6 +51,28 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
   const [expectedReturnTime, setExpectedReturnTime] = useState<string>('14:30');
   const [approver, setApprover] = useState<string>('شؤون العاملين');
   const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (prefillData) {
+      setSelectedWorkerCode(prefillData.workerCode);
+      setPassDate(prefillData.date || todayStr);
+      if (prefillData.exitTime) {
+        const cleanTime = prefillData.exitTime.slice(0, 5);
+        setExitTime(cleanTime);
+        const [h, m] = cleanTime.split(':').map((n) => parseInt(n, 10) || 0);
+        const nextMins = Math.min(23 * 60 + 59, h * 60 + m + 60);
+        const nextH = String(Math.floor(nextMins / 60)).padStart(2, '0');
+        const nextM = String(nextMins % 60).padStart(2, '0');
+        setExpectedReturnTime(`${nextH}:${nextM}`);
+      }
+      setPassType('rest_of_day');
+      setFormError(null);
+      setShowAddModal(true);
+      if (onClearPrefill) {
+        onClearPrefill();
+      }
+    }
+  }, [prefillData, onClearPrefill, todayStr]);
 
   const [completingPassId, setCompletingPassId] = useState<string | null>(null);
   const [returnInputTime, setReturnInputTime] = useState<string>('14:00');

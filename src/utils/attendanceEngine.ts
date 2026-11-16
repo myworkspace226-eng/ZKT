@@ -89,7 +89,6 @@ export interface SmartAttendanceOptions {
   overtimeGraceMinutes?: number; // default 30 min
   overnightCutoffHour?: number; // e.g. 6 (06:00 AM)
   shifts?: ShiftRule[];
-  fridayMultiplier?: number;
   workers?: Worker[];
   workerMap?: Map<number, Worker>;
   now?: Date;
@@ -175,6 +174,8 @@ export function processSmartAttendanceLogs(
         targetWorkDay = curDate.toISOString().slice(0, 10);
       }
 
+      rec.workDate = targetWorkDay;
+
       let dList = dayPunchesMap.get(targetWorkDay);
       if (!dList) {
         dList = [];
@@ -200,6 +201,7 @@ export function processSmartAttendanceLogs(
       });
 
       for (const p of punchesOnDay) {
+        p.workDate = workDay;
         p.hasMorningIn = hasMorningInPunch;
       }
 
@@ -243,15 +245,28 @@ export function processSmartAttendanceLogs(
       const isToday = workDay === todayStr;
       const isPastShiftEnd = isToday ? nowTotalMinutes >= shiftEndTotalMinutes : true;
 
-      // Helper for Overtime on departure punches (Standard factory logic for all days)
+      // Helper for Overtime on departure punches (Standard factory logic for all days, including after-midnight)
       const evaluateOvertime = (punch: AttendanceRecord, punchMinutes: number) => {
+        if (punch.linkedPermissionId) {
+          punch.isOvertime = false;
+          punch.overtimeHours = 0;
+          return;
+        }
         if (punch.isHROverride && punch.overtimeHours !== undefined) {
           punch.isOvertime = punch.overtimeHours > 0;
           return;
         }
 
+        let outMinutes = punchMinutes;
+        const isOvernightOut =
+          outMinutes < overnightCutoff * 60 ||
+          (punch.workDate && punch.displayDate && punch.workDate !== punch.displayDate);
+        if (outMinutes < shiftEndTotalMinutes && isOvernightOut) {
+          outMinutes += 1440;
+        }
+
         // If departure is past shiftEnd + overtimeGraceMinutes (e.g. 30 mins)
-        const minutesPastEnd = punchMinutes - shiftEndTotalMinutes;
+        const minutesPastEnd = outMinutes - shiftEndTotalMinutes;
         if (minutesPastEnd > overtimeGraceMinutes) {
           // Counter starts from shiftEnd itself!
           const otHours = Number((minutesPastEnd / 60).toFixed(2));
@@ -265,9 +280,23 @@ export function processSmartAttendanceLogs(
 
       // Helper for Early Departure on OUT punches
       const evaluateEarlyDeparture = (punch: AttendanceRecord, punchMinutes: number) => {
+        if (punch.linkedPermissionId) {
+          punch.isEarlyDeparture = false;
+          punch.earlyDepartureMinutes = 0;
+          punch.earlyDepartureReason = undefined;
+          return;
+        }
         if (punch.isHROverride) return;
-        if (punchMinutes < shiftEndTotalMinutes) {
-          const diff = shiftEndTotalMinutes - punchMinutes;
+        let outMinutes = punchMinutes;
+        const isOvernightOut =
+          outMinutes < overnightCutoff * 60 ||
+          (punch.workDate && punch.displayDate && punch.workDate !== punch.displayDate);
+        if (outMinutes < shiftEndTotalMinutes && isOvernightOut) {
+          outMinutes += 1440;
+        }
+
+        if (outMinutes < shiftEndTotalMinutes) {
+          const diff = shiftEndTotalMinutes - outMinutes;
           punch.isEarlyDeparture = true;
           punch.earlyDepartureMinutes = diff;
           punch.earlyDepartureReason = `انصراف مبكر (-${diff} د) قبل موعد نهاية الوردية (${effectiveShiftEndStr})`;
@@ -275,6 +304,17 @@ export function processSmartAttendanceLogs(
           punch.isEarlyDeparture = false;
           punch.earlyDepartureMinutes = 0;
           punch.earlyDepartureReason = undefined;
+        }
+      };
+
+      const applyPermissionNoteIfNeeded = (rec: AttendanceRecord) => {
+        if (
+          rec.linkedPermissionId &&
+          rec.resolvedState === 'OUT' &&
+          rec.ambiguousResolution !== 'temporary_pass' &&
+          !rec.isReturnFromPass
+        ) {
+          rec.manualNote = 'انصراف بتصريح معتمد';
         }
       };
 
@@ -295,12 +335,13 @@ export function processSmartAttendanceLogs(
             if (isPastShiftEnd) {
               p.isMissedPunch = true;
               p.missedPunchType = 'OUT';
-              p.missedPunchReason = 'بصمة انصراف مفقودة (تم تسجيل الحضور يدوياً)';
+              p.missedPunchReason = 'تسوية انصراف مطلوبة (تم تسجيل الحضور يدوياً)';
             }
           } else {
             evaluateEarlyDeparture(p, pMinutes);
             evaluateOvertime(p, pMinutes);
           }
+          applyPermissionNoteIfNeeded(p);
           processedAll.push(p);
           return;
         }
@@ -313,14 +354,14 @@ export function processSmartAttendanceLogs(
           if (isPastShiftEnd) {
             p.isMissedPunch = true;
             p.missedPunchType = 'OUT';
-            p.missedPunchReason = 'بصمة انصراف مفقودة (لم يسجل خروج)';
+            p.missedPunchReason = 'تسوية انصراف مطلوبة (لم يسجل خروج)';
           } else {
             p.isMissedPunch = false;
             p.missedPunchReason = undefined;
           }
           p.isEarlyDeparture = false;
         }
-        // Rule 4: Ambiguous Window (12:00 to 15:59 -> 720 to 959 minutes) (Bug 2 Fix: 3 Options)
+        // Rule 4: Ambiguous Window (12:00 to 15:59 -> 720 to 959 minutes) (Bug 2 Fix: Options)
         else if (pMinutes >= 720 && pMinutes < 960) {
           if (p.ambiguousResolution === 'temporary_pass') {
             p.resolvedState = 'OUT';
@@ -328,6 +369,17 @@ export function processSmartAttendanceLogs(
             p.missingInPunch = false;
             p.isMissedPunch = false;
             p.manualNote = p.manualNote || `تصريح مؤقت (عودة متوقعة: ${p.expectedReturnTime || '-'})`;
+          } else if (p.ambiguousResolution === 'out_with_pass') {
+            p.resolvedState = 'OUT';
+            p.isAmbiguousSinglePunch = false;
+            p.missingInPunch = false;
+            p.isMissedPunch = false;
+            p.isEarlyDeparture = false;
+            p.earlyDepartureMinutes = 0;
+            p.earlyDepartureReason = undefined;
+            p.isOvertime = false;
+            p.overtimeHours = 0;
+            p.manualNote = 'انصراف بتصريح معتمد';
           } else if (p.ambiguousResolution === 'final_out') {
             p.resolvedState = 'OUT';
             p.isAmbiguousSinglePunch = false;
@@ -348,12 +400,12 @@ export function processSmartAttendanceLogs(
               ? `اعتماد حضور متأخر (+${diff} د تأخير بعد سماحية ${graceMinutes} د) من قِبل HR`
               : `اعتماد حضور ضمن فترة السماحية (${graceMinutes} د)`);
           } else {
-            // Unresolved: Popup required for HR decision (3 options: temporary_pass / final_out / late_in)
+            // Unresolved: Popup required for HR decision
             p.isAmbiguousSinglePunch = true;
             p.ambiguousResolution = 'pending';
             p.isMissedPunch = true;
             p.missedPunchType = 'AMBIGUOUS';
-            p.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
+            p.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR';
           }
         }
         // Rule 5: Post-12 PM / Afternoon Window (16:00 onwards -> >= 960 minutes or early morning < 360)
@@ -364,11 +416,12 @@ export function processSmartAttendanceLogs(
           p.missingInPunch = true;
           p.isMissedPunch = true;
           p.missedPunchType = 'IN';
-          p.missedPunchReason = 'بصمة حضور ناقصة (Missing IN)';
+          p.missedPunchReason = 'تسوية حضور مطلوبة';
           evaluateEarlyDeparture(p, pMinutes);
           evaluateOvertime(p, pMinutes);
         }
 
+        applyPermissionNoteIfNeeded(p);
         processedAll.push(p);
 
       } else {
@@ -396,7 +449,7 @@ export function processSmartAttendanceLogs(
               const diff = Math.max(0, fMinutes - shiftStartMinutes);
               first.lateMinutes = diff;
               first.manualNote = first.manualNote || `اعتماد حضور متأخر (+${diff} د) من قِبل HR`;
-            } else if (first.ambiguousResolution === 'temporary_pass' || first.ambiguousResolution === 'final_out') {
+            } else if (first.ambiguousResolution === 'temporary_pass' || first.ambiguousResolution === 'out_with_pass' || first.ambiguousResolution === 'final_out') {
               first.resolvedState = 'OUT';
               first.isAmbiguousSinglePunch = false;
               first.isMissedPunch = false;
@@ -405,16 +458,17 @@ export function processSmartAttendanceLogs(
               first.ambiguousResolution = 'pending';
               first.isMissedPunch = true;
               first.missedPunchType = 'AMBIGUOUS';
-              first.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
+              first.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR';
             }
           } else {
             first.resolvedState = 'OUT';
             first.missingInPunch = true;
             first.isAmbiguousSinglePunch = false;
-            first.missedPunchReason = 'بصمة حضور ناقصة (Missing IN)';
+            first.missedPunchReason = 'تسوية حضور مطلوبة';
           }
         }
         first.isDuplicateIgnored = false;
+        applyPermissionNoteIfNeeded(first);
         processedAll.push(first);
 
         const last = acceptedPunches[acceptedPunches.length - 1];
@@ -422,7 +476,7 @@ export function processSmartAttendanceLogs(
         const lMinutes = (parseInt(lHStr, 10) || 16) * 60 + (parseInt(lMStr, 10) || 30);
 
         // Bug 3 Fix: If second (or last) punch falls in ambiguous window (12:00 - 15:59),
-        // FORBIDDEN to automatically consider it OUT! It MUST prompt HR with the 3 options.
+        // FORBIDDEN to automatically consider it OUT! It MUST prompt HR.
         if (!last.isHROverride) {
           if (lMinutes >= 720 && lMinutes < 960) {
             // Ambiguous window!
@@ -431,6 +485,13 @@ export function processSmartAttendanceLogs(
               last.isAmbiguousSinglePunch = false;
               last.isMissedPunch = false;
               last.manualNote = last.manualNote || `تصريح مؤقت (عودة متوقعة: ${last.expectedReturnTime || '-'})`;
+            } else if (last.ambiguousResolution === 'out_with_pass') {
+              last.resolvedState = 'OUT';
+              last.isAmbiguousSinglePunch = false;
+              last.isMissedPunch = false;
+              evaluateEarlyDeparture(last, lMinutes);
+              evaluateOvertime(last, lMinutes);
+              last.manualNote = 'انصراف بتصريح معتمد';
             } else if (last.ambiguousResolution === 'final_out') {
               last.resolvedState = 'OUT';
               last.isAmbiguousSinglePunch = false;
@@ -451,10 +512,10 @@ export function processSmartAttendanceLogs(
               last.ambiguousResolution = 'pending';
               last.isMissedPunch = true;
               last.missedPunchType = 'AMBIGUOUS';
-              last.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
+              last.missedPunchReason = 'بصمة في نافذة الغموض (12:00-15:59) - تتطلب قرار HR';
             }
-          } else if (lMinutes >= 960) {
-            // Post-12 PM / Afternoon checkout window (16:00 onwards)
+          } else if (lMinutes >= 960 || lMinutes < overnightCutoff * 60) {
+            // Post-12 PM / Afternoon checkout window (16:00 onwards) or overnight after-midnight (00:00 - 05:59)
             last.resolvedState = 'OUT';
             last.isAmbiguousSinglePunch = false;
             last.isMissedPunch = false;
@@ -467,8 +528,12 @@ export function processSmartAttendanceLogs(
             last.isMissedPunch = false;
             evaluateEarlyDeparture(last, lMinutes);
           }
+        } else if (last.resolvedState === 'OUT') {
+          evaluateEarlyDeparture(last, lMinutes);
+          evaluateOvertime(last, lMinutes);
         }
         last.isDuplicateIgnored = false;
+        applyPermissionNoteIfNeeded(last);
         processedAll.push(last);
 
         // Intermediate punches (Punches between first and last)
@@ -485,6 +550,12 @@ export function processSmartAttendanceLogs(
             mid.isDuplicateIgnored = false;
             mid.isAmbiguousSinglePunch = false;
             mid.isMissedPunch = false;
+          } else if (mid.ambiguousResolution === 'out_with_pass') {
+            mid.resolvedState = 'OUT';
+            mid.isDuplicateIgnored = false;
+            mid.isAmbiguousSinglePunch = false;
+            mid.isMissedPunch = false;
+            mid.manualNote = 'انصراف بتصريح معتمد';
           } else if (mid.ambiguousResolution === 'final_out') {
             mid.resolvedState = 'OUT';
             mid.isDuplicateIgnored = false;
@@ -506,13 +577,14 @@ export function processSmartAttendanceLogs(
             mid.ambiguousResolution = 'pending';
             mid.isMissedPunch = true;
             mid.missedPunchType = 'AMBIGUOUS';
-            mid.missedPunchReason = 'بصمة بينية في نافذة الغموض (12:00-15:59) - تتطلب قرار HR (تصريح مؤقت / انصراف نهائي / حضور متأخر)';
+            mid.missedPunchReason = 'بصمة بينية في نافذة الغموض (12:00-15:59) - تتطلب قرار HR';
             mid.isDuplicateIgnored = false;
           } else {
             // General intermediate punch outside ambiguous window
             mid.isDuplicateIgnored = true;
             mid.duplicateReason = 'بصمة بينية (تم اعتماد الأولى كحضور والأخيرة كانصراف)';
           }
+          applyPermissionNoteIfNeeded(mid);
           processedAll.push(mid);
         }
       }
@@ -548,7 +620,6 @@ export function calculateDailyPerformance(
   checkIn: AttendanceRecord | undefined,
   checkOut: AttendanceRecord | undefined,
   shift: ShiftRule,
-  isFriday: boolean = false,
   departureGraceMinutes: number = 30
 ) {
   if (!checkIn) {
@@ -635,9 +706,7 @@ export function calculateDailyPerformance(
     lateMinutes,
     isEarlyDeparture: isEarly,
     earlyDepartureMinutes: earlyMin,
-    notes: isFriday 
-      ? 'عمل يوم الجمعة (مضاعف 2x - 16 ساعة)' 
-      : isEarly 
+    notes: isEarly 
       ? `انصراف مبكر (-${earlyMin} دقيقة)` 
       : '',
   };

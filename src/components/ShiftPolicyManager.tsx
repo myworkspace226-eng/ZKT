@@ -28,7 +28,6 @@ export const ShiftPolicyManager: React.FC<ShiftPolicyManagerProps> = ({
   // Common General Overtime & Overnight Rules (applied to all workers who stay late)
   const [overnightEndThreshold, setOvernightEndThreshold] = useState<string>('07:00');
   const [earlyArrivalWindowStart, setEarlyArrivalWindowStart] = useState<string>('06:30');
-  const [fridayMultiplier, setFridayMultiplier] = useState<number>(2.0);
 
   const activeShift = shifts.find(s => s.id === selectedShiftId) || shifts[0];
   const [editedShift, setEditedShift] = useState<ShiftRule>(activeShift);
@@ -45,7 +44,6 @@ export const ShiftPolicyManager: React.FC<ShiftPolicyManagerProps> = ({
       ...editedShift,
       overnightEndThreshold,
       earlyArrivalWindowStart,
-      fridayMultiplier,
     });
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
@@ -166,14 +164,14 @@ export const ShiftPolicyManager: React.FC<ShiftPolicyManagerProps> = ({
               </div>
             </div>
 
-            {/* General Overtime, Overnight & Friday Rules (Applies to any worker who stays late or works Friday) */}
+            {/* General Overtime & Overnight Rules */}
             <div className="border-t border-slate-800 pt-3 space-y-2.5">
               <div className="text-xs font-bold text-white flex items-center gap-1.5">
                 <Moon className="w-3.5 h-3.5 text-indigo-400" />
                 <span>قواعد احتساب الإضافي وسهر المبيت (تطبق تلقائياً على أي عامل يسهر أو يبيت):</span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2.5 font-mono p-3 rounded bg-slate-950 border border-slate-800/80">
+              <div className="grid grid-cols-2 gap-2.5 font-mono p-3 rounded bg-slate-950 border border-slate-800/80">
                 <div>
                   <label className="text-slate-400 block mb-1 text-[11px]">حد نهاية سهر المبيت:</label>
                   <input
@@ -194,18 +192,6 @@ export const ShiftPolicyManager: React.FC<ShiftPolicyManagerProps> = ({
                     className="w-full bg-slate-900 border border-slate-700 rounded p-1 text-white"
                   />
                   <span className="text-[10px] text-slate-500 block mt-1">البصمة بعدها تبدأ حسابها من 8:00 ص</span>
-                </div>
-
-                <div>
-                  <label className="text-slate-400 block mb-1 text-[11px]">معامل يوم الجمعة:</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={fridayMultiplier}
-                    onChange={(e) => setFridayMultiplier(Number(e.target.value))}
-                    className="w-full bg-slate-900 border border-slate-700 rounded p-1 text-white"
-                  />
-                  <span className="text-[10px] text-slate-500 block mt-1">2.0x (اليوم بيومين = 16 ساعة)</span>
                 </div>
               </div>
             </div>
