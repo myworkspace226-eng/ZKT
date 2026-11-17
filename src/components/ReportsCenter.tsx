@@ -39,6 +39,11 @@ import { CustomDatePicker } from './CustomDatePicker';
 
 const ARABIC_WEEKDAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
+const formatLocalDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const getLocalToday = () => formatLocalDate(new Date());
+
 interface ReportsCenterProps {
   workers: Worker[];
   attendanceRecords: AttendanceRecord[];
@@ -73,8 +78,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   const [activeReportTab, setActiveReportTab] = useState<'daily_manager' | 'worker_dossier' | 'overtime' | 'late' | 'timesheet'>('daily_manager');
   
   // Date states
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const firstDayOfMonthStr = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+  const todayStr = getLocalToday();
+  const firstDayOfMonthStr = formatLocalDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
 
   const [selectedDay, setSelectedDay] = useState<string>(todayStr);
   const [startDate, setStartDate] = useState<string>(firstDayOfMonthStr);
@@ -123,24 +128,24 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     setQuickPreset(preset);
     const now = new Date();
     if (preset === 'today') {
-      const d = now.toISOString().slice(0, 10);
+      const d = formatLocalDate(now);
       setStartDate(d);
       setEndDate(d);
     } else if (preset === 'yesterday') {
-      const y = new Date(now.getTime() - 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const y = formatLocalDate(new Date(now.getTime() - 24 * 3600 * 1000));
       setStartDate(y);
       setEndDate(y);
     } else if (preset === 'week') {
-      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const oneWeekAgo = formatLocalDate(new Date(now.getTime() - 7 * 24 * 3600 * 1000));
       setStartDate(oneWeekAgo);
-      setEndDate(now.toISOString().slice(0, 10));
+      setEndDate(formatLocalDate(now));
     } else if (preset === 'month') {
-      const first = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+      const first = formatLocalDate(new Date(now.getFullYear(), now.getMonth(), 1));
       setStartDate(first);
-      setEndDate(now.toISOString().slice(0, 10));
+      setEndDate(formatLocalDate(now));
     } else if (preset === 'last_month') {
-      const firstLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 10);
-      const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10);
+      const firstLastMonth = formatLocalDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+      const lastDayLastMonth = formatLocalDate(new Date(now.getFullYear(), now.getMonth(), 0));
       setStartDate(firstLastMonth);
       setEndDate(lastDayLastMonth);
     }
@@ -450,8 +455,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
   const dossierDailyLedger = useMemo(() => {
     if (!selectedDossierWorker || !startDate || !endDate) return [];
     const list: any[] = [];
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const start = new Date(`${startDate}T12:00:00`);
+    const end = new Date(`${endDate}T12:00:00`);
 
     const shift = shifts.find((s) => s.id === selectedDossierWorker.shiftId) || shifts[0];
     const [endH, endM] = shift.endTime.split(':').map(Number);
@@ -475,7 +480,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     });
 
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = formatLocalDate(d);
       const dow = d.getDay();
       const dayName = ARABIC_WEEKDAYS[dow] || '';
       const isFriday = dow === 5;
@@ -528,7 +533,10 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       let notes = '';
 
       if (dayPunches.length > 0) {
-        if (checkInPunch) {
+        if (checkInPunch?.isHROverride && typeof checkInPunch?.lateMinutes === 'number') {
+          lateMins = checkInPunch.lateMinutes;
+          status = lateMins > 0 ? 'حاضر متأخر' : 'حاضر في الموعد';
+        } else if (checkInPunch) {
           const punchTime = new Date(checkInPunch.timestamp);
           const [sH, sM] = shift.startTime.split(':').map(Number);
           const inMins = punchTime.getHours() * 60 + punchTime.getMinutes();
@@ -543,7 +551,32 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           status = 'حاضر (تسوية حضور مطلوبة)';
         }
 
-        if (checkOutPunch) {
+        if (checkOutPunch?.linkedPermissionId) {
+          status = 'حاضر (انصراف بتصريح)';
+        }
+
+        if (checkOutPunch?.isHROverride && typeof checkOutPunch?.overtimeHours === 'number') {
+          otHours = checkOutPunch.overtimeHours;
+          if (otHours > 0) {
+            notes = `إضافي معتمد يدوياً (${formatHoursAndMinutes(otHours)})`;
+          }
+          if (checkOutPunch.linkedPermissionId) {
+            const linkedPass = gatePasses.find((p) => p.id === checkOutPunch.linkedPermissionId);
+            const passTypeLabel = linkedPass
+              ? (linkedPass.reason === 'official_mission'
+                ? 'مأمورية'
+                : linkedPass.reason === 'medical'
+                ? 'طبي'
+                : linkedPass.reason === 'personal_excused'
+                ? 'شخصي معتمد'
+                : 'شخصي مخصوم')
+              : 'معتمد';
+            const passNote = `انصراف بتصريح معتمد (${passTypeLabel})`;
+            notes = otHours > 0
+              ? `${passNote} • إضافي (${formatHoursAndMinutes(otHours)})`
+              : passNote;
+          }
+        } else if (checkOutPunch) {
           const outTime = new Date(checkOutPunch.timestamp);
           let outMins = outTime.getHours() * 60 + outTime.getMinutes();
           const isOvernightOut =
@@ -558,6 +591,23 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             notes = `إضافي بعد انتهاء الوردية (${formatHoursAndMinutes(otHours)})`;
           } else if (pastEnd >= 0) {
             notes = `انصراف طبيعي ضمن فترة السماح (${otDepartureGrace} د)`;
+          }
+
+          if (checkOutPunch.linkedPermissionId) {
+            const linkedPass = gatePasses.find((p) => p.id === checkOutPunch.linkedPermissionId);
+            const passTypeLabel = linkedPass
+              ? (linkedPass.reason === 'official_mission'
+                ? 'مأمورية'
+                : linkedPass.reason === 'medical'
+                ? 'طبي'
+                : linkedPass.reason === 'personal_excused'
+                ? 'شخصي معتمد'
+                : 'شخصي مخصوم')
+              : 'معتمد';
+            const passNote = `انصراف بتصريح معتمد (${passTypeLabel})`;
+            notes = otHours > 0
+              ? `${passNote} • إضافي (${formatHoursAndMinutes(otHours)})`
+              : passNote;
           }
         }
 
@@ -596,7 +646,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     }
 
     return list;
-  }, [selectedDossierWorker, startDate, endDate, dossierWorkerRecords, dossierWorkerPasses, shifts, otDepartureGrace, leaves, officialHolidays, overnightCutoffHour]);
+  }, [selectedDossierWorker, startDate, endDate, dossierWorkerRecords, dossierWorkerPasses, gatePasses, shifts, otDepartureGrace, leaves, officialHolidays, overnightCutoffHour]);
 
   // Totals for dossier (Hours and Minutes only - Zero financial metrics)
   const dossierSummary = useMemo(() => {
@@ -703,7 +753,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
     const getDayOfWeek = (dStr: string) => {
       let dow = dayOfWeekCache.get(dStr);
       if (dow === undefined) {
-        dow = new Date(dStr + 'T00:00:00').getDay();
+        dow = new Date(`${dStr}T12:00:00`).getDay();
         dayOfWeekCache.set(dStr, dow);
       }
       return dow;
@@ -773,15 +823,55 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
             }
             minutesPast = outMinutes - scheduledEndMinutes;
 
-            if (minutesPast > otDepartureGrace) {
-              dayOtHours = Number((minutesPast / 60).toFixed(2));
-              shiftOt += dayOtHours;
-              otDays++;
-              statusLabel = `إضافي معتمد (${formatHoursAndMinutes(dayOtHours)})`;
-            } else if (minutesPast >= 0) {
-              statusLabel = `انصراف طبيعي ضمن السماحية (${minutesPast} د - بدون إضافي)`;
+            const hasOverrideOt = Boolean(checkOut.isHROverride && typeof checkOut.overtimeHours === 'number');
+
+            // تحقق أولاً: هل البصمة مربوطة بتصريح؟
+            if (checkOut.linkedPermissionId) {
+              const linkedPass = gatePasses.find((p) => p.id === checkOut.linkedPermissionId);
+              const passTypeLabel = linkedPass
+                ? (linkedPass.reason === 'official_mission'
+                  ? 'مأمورية'
+                  : linkedPass.reason === 'medical'
+                  ? 'طبي'
+                  : linkedPass.reason === 'personal_excused'
+                  ? 'شخصي معتمد'
+                  : 'شخصي مخصوم')
+                : 'معتمد';
+
+              dayOtHours = hasOverrideOt
+                ? (checkOut.overtimeHours as number)
+                : (minutesPast > otDepartureGrace
+                  ? Number((minutesPast / 60).toFixed(2))
+                  : 0);
+
+              if (dayOtHours > 0) {
+                shiftOt += dayOtHours;
+                otDays++;
+              }
+
+              statusLabel = dayOtHours > 0
+                ? `انصراف بتصريح (${passTypeLabel}) + ${formatHoursAndMinutes(dayOtHours)} إضافي`
+                : `انصراف بتصريح (${passTypeLabel})`;
+            } else if (hasOverrideOt) {
+              dayOtHours = checkOut.overtimeHours as number;
+              if (dayOtHours > 0) {
+                shiftOt += dayOtHours;
+                otDays++;
+                statusLabel = `إضافي معتمد يدوياً (${formatHoursAndMinutes(dayOtHours)})`;
+              } else {
+                statusLabel = 'اعتماد HR (بدون إضافي)';
+              }
             } else {
-              statusLabel = `انصراف مبكر قبل نهاية الوردية (${Math.abs(minutesPast)} د)`;
+              if (minutesPast > otDepartureGrace) {
+                dayOtHours = Number((minutesPast / 60).toFixed(2));
+                shiftOt += dayOtHours;
+                otDays++;
+                statusLabel = `إضافي معتمد (${formatHoursAndMinutes(dayOtHours)})`;
+              } else if (minutesPast >= 0) {
+                statusLabel = `انصراف طبيعي ضمن السماحية (${minutesPast} د - بدون إضافي)`;
+              } else {
+                statusLabel = `انصراف مبكر قبل نهاية الوردية (${Math.abs(minutesPast)} د)`;
+              }
             }
           }
 
@@ -837,7 +927,7 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
       totalOtFactoryHours: Number(overallFactoryHours.toFixed(1)),
       otWorkersCount: activeOtWorkers,
     };
-  }, [recordsInDateRange, filteredOtWorkers, shifts, devices, otDepartureGrace, overnightCutoffHour]);
+  }, [recordsInDateRange, filteredOtWorkers, gatePasses, shifts, devices, otDepartureGrace, overnightCutoffHour]);
 
   const handleExportAdvancedOt = () => {
     if (otViewMode === 'summary') {
@@ -1561,13 +1651,15 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
                         {row.overtimeHours > 0 ? (
                           <span className="text-cyan-400 font-bold font-mono">+{row.overtimeHours} س</span>
                         ) : (
-                          <span className="text-slate-600">-</span>
+                          <span className="text-slate-600">—</span>
                         )}
                       </td>
                       <td className="py-2 px-3 font-sans text-purple-300 text-[11px]">{row.gatePassInfo}</td>
                       <td className="py-2 px-3 text-center font-sans">
                         <span className={`text-[10px] px-2 py-0.5 rounded ${
-                          row.status.startsWith('حاضر في الموعد')
+                          row.status.includes('انصراف بتصريح')
+                            ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-medium'
+                            : row.status.startsWith('حاضر في الموعد')
                             ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                             : row.status.startsWith('حاضر متأخر')
                             ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'

@@ -20,8 +20,12 @@ import {
   Palmtree
 } from 'lucide-react';
 import { Worker, AttendanceRecord, GatePass, ShiftRule, FactorySettings, LeaveRecord, OfficialHoliday } from '../types';
-import { calculateDailyPerformance, exportToExcel, formatHoursAndMinutes } from '../utils/attendanceEngine';
+import { calculateDailyPerformance, exportToExcel, formatHoursAndMinutes, getLocalDateStr } from '../utils/attendanceEngine';
 import { CustomDatePicker } from './CustomDatePicker';
+
+const formatLocalDate = (d: Date) => getLocalDateStr(d);
+
+const getLocalToday = () => getLocalDateStr();
 
 interface DailySummaryProps {
   workers: Worker[];
@@ -42,7 +46,7 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
   leaves = [],
   officialHolidays = [],
 }) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getLocalDateStr();
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [filterStatus, setFilterStatus] = useState<'all' | 'present' | 'absent' | 'leave' | 'late' | 'pass'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -57,16 +61,16 @@ export const DailySummary: React.FC<DailySummaryProps> = ({
   }, [selectedDate]);
 
   // Quick Date Setters
-  const handleSetToday = () => setSelectedDate(todayStr);
+  const handleSetToday = () => setSelectedDate(getLocalDateStr());
   const handleSetYesterday = () => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    setSelectedDate(d.toISOString().slice(0, 10));
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    setSelectedDate(getLocalDateStr(y));
   };
   const handleSetDayBefore = () => {
     const d = new Date();
     d.setDate(d.getDate() - 2);
-    setSelectedDate(d.toISOString().slice(0, 10));
+    setSelectedDate(formatLocalDate(d));
   };
 
   // Dynamic KPI Calculation (Task 5: Reactive to processed records and gate passes)

@@ -32,6 +32,11 @@ import { AttendanceRecord, Worker, Device, FactorySettings, HRAuditRecord, GateP
 import { processSmartAttendanceLogs, exportToExcel } from '../utils/attendanceEngine';
 import { CustomDatePicker } from './CustomDatePicker';
 
+const formatLocalDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const getLocalToday = () => formatLocalDate(new Date());
+
 export interface GroupedAttendanceRow {
   rowKey: string;
   workerCode: number;
@@ -146,7 +151,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
   
   // Date Filtering State
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = getLocalToday();
   const [customFromDate, setCustomFromDate] = useState<string>(todayISO);
   const [customToDate, setCustomToDate] = useState<string>(todayISO);
 
@@ -202,7 +207,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const source = (processedAttendanceRecords && processedAttendanceRecords.length > 0)
       ? processedAttendanceRecords
       : processSmartAttendanceLogs(records, { 
+          shiftStartTime: settings?.standardShiftStart || '08:00',
           shiftEndTime: settings?.standardShiftEnd || shiftEndTime,
+          bangladeshiShiftStart: settings?.bangladeshiShiftStart || '08:00',
           bangladeshiShiftEnd: settings?.bangladeshiShiftEnd || '18:30',
           earlyDepartureWindowMinutes: settings?.earlyDepartureWindowMinutes ?? 30,
           duplicateWindowMinutes: settings?.duplicateWindowMinutes ?? 60,
@@ -254,9 +261,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
   // Filtered records by Date, Deduplication, Department, State, and Search
   const filteredRecords = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterdayDate = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const today = getLocalToday();
+    const yesterdayDate = formatLocalDate(new Date(Date.now() - 86400000));
+    const sevenDaysAgo = formatLocalDate(new Date(Date.now() - 7 * 86400000));
     const monthStart = today.slice(0, 7) + '-01';
 
     return smartRecords.filter((rec) => {
@@ -450,7 +457,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     exportToExcel(
       exportData, 
       'سجل_الحركات', 
-      `سجل_حركات_البصمة_${dateLabel}_${new Date().toISOString().slice(0, 10)}`
+      `سجل_حركات_البصمة_${dateLabel}_${getLocalToday()}`
     );
   };
 
@@ -526,7 +533,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         id: `audit-${Date.now()}`,
         timestamp: new Date().toISOString(),
         displayTime: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-        displayDate: new Date().toISOString().slice(0, 10),
+        displayDate: getLocalToday(),
         modifiedBy: manualEditor || 'مسؤول الموارد البشرية',
         workerCode: worker.code,
         workerName: worker.name,
@@ -613,7 +620,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         onUpdateGatePass({
           ...matchedPass,
           status: 'completed',
-          returnTime: editTime ? editTime.slice(0, 5) : matchedPass.returnTime,
+          returnTime: matchedPass.type === 'rest_of_day'
+            ? matchedPass.returnTime
+            : (editTime ? editTime.slice(0, 5) : matchedPass.returnTime),
         });
       }
     }
@@ -624,7 +633,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         id: `audit-${Date.now()}`,
         timestamp: new Date().toISOString(),
         displayTime: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-        displayDate: new Date().toISOString().slice(0, 10),
+        displayDate: getLocalToday(),
         modifiedBy: 'مسؤول الموارد البشرية',
         workerCode: editWorkerCode,
         workerName: worker ? worker.name : editingRecord.workerName,
@@ -655,7 +664,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         id: `audit-${Date.now()}`,
         timestamp: new Date().toISOString(),
         displayTime: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-        displayDate: new Date().toISOString().slice(0, 10),
+        displayDate: getLocalToday(),
         modifiedBy: 'مسؤول الموارد البشرية',
         workerCode: target.workerCode,
         workerName: target.workerName,
@@ -679,7 +688,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const workerName = worker?.name || resolvingRecord.workerName;
     const nowIso = new Date().toISOString();
     const curTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
-    const curDate = new Date().toISOString().slice(0, 10);
+    const curDate = getLocalToday();
 
     if (resolutionChoice === 'duplicate') {
       const updated: AttendanceRecord = {
@@ -796,7 +805,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         onUpdateGatePass({
           ...selectedPass,
           status: 'completed',
-          returnTime: resolvingRecord.displayTime.slice(0, 5),
+          returnTime: selectedPass.type === 'rest_of_day'
+            ? selectedPass.returnTime
+            : resolvingRecord.displayTime.slice(0, 5),
         });
       }
 
@@ -953,7 +964,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     const workerName = worker?.name || overridingRecord.workerName;
     const nowIso = new Date().toISOString();
     const curTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
-    const curDate = new Date().toISOString().slice(0, 10);
+    const curDate = getLocalToday();
+    const targetDate = overridingRecord.workDate || overridingRecord.displayDate;
 
     // CRITICAL: DO NOT MUTATE THE ORIGINAL OUT RECORD!
     // Create a new manual punch for the morning IN:
@@ -962,8 +974,9 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
       workerCode: overridingRecord.workerCode,
       workerName: workerName,
       department: worker?.department || overridingRecord.department,
-      timestamp: `${overridingRecord.displayDate}T${missingInTime}:00`,
-      displayDate: overridingRecord.displayDate,
+      timestamp: `${targetDate}T${missingInTime}:00`,
+      displayDate: targetDate,
+      workDate: targetDate,
       displayTime: missingInTime,
       rawState: 'IN',
       resolvedState: 'IN',
@@ -991,7 +1004,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
         workerCode: overridingRecord.workerCode,
         workerName: workerName,
         recordId: overridingRecord.id,
-        recordDate: overridingRecord.displayDate,
+        recordDate: targetDate,
         recordTime: overridingRecord.displayTime,
         actionType: 'RESOLVE_MISSING_IN',
         oldValue: `بصمة انصراف منفردة (${overridingRecord.displayTime}) دون حضور صباحي`,
@@ -2314,7 +2327,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
                       'القيمة الجديدة': item.newValue,
                       'سبب ومبرر التعديل': item.reason,
                     }));
-                    exportToExcel(exportData, 'سجل_التدقيق_HR', `سجل_تدقيق_تعديلات_HR_${new Date().toISOString().slice(0, 10)}`);
+                    exportToExcel(exportData, 'سجل_التدقيق_HR', `سجل_تدقيق_تعديلات_HR_${getLocalToday()}`);
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors cursor-pointer"
                 >

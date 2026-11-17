@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Worker, Device } from '../types';
-import { exportToExcel } from '../utils/attendanceEngine';
+import { exportToExcel, getLocalDateStr } from '../utils/attendanceEngine';
 import { 
   uploadUserToDevice, 
   pullDeviceUsers, 
@@ -226,7 +226,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
     onUpdateWorker({
       ...deactivatingWorker,
       isActive: false,
-      deactivationDate: new Date().toISOString().slice(0, 10),
+      deactivationDate: getLocalDateStr(),
     });
     setDeactivatingWorker(null);
   };
@@ -422,7 +422,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
       hasFace: false,
       assignedDeviceIds: devices.map(d => d.id),
       phone: newWorkerPhone.trim(),
-      joinDate: new Date().toISOString().slice(0, 10),
+      joinDate: getLocalDateStr(),
       isNameSyncedToDevice: false, // Starts as pending until pushed to machine
     };
 
@@ -579,7 +579,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
                   hasFingerprint: true,
                   hasFace: false,
                   assignedDeviceIds: [dev.id],
-                  joinDate: new Date().toISOString().slice(0, 10),
+                  joinDate: getLocalDateStr(),
                   isNameSyncedToDevice: true,
                 });
               }
@@ -618,7 +618,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
       'حالة الاسم على الماكينة': w.isNameSyncedToDevice ? 'مربوط على الماكينة' : 'في انتظار الرفع',
       'الحالة': w.isActive ? 'نشط' : 'مجمد',
     }));
-    exportToExcel(data, 'العاملين', `سجل_الموظفين_${new Date().toISOString().slice(0, 10)}`);
+    exportToExcel(data, 'العاملين', `سجل_الموظفين_${getLocalDateStr()}`);
   };
 
   const handleImportExcelWorkers = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -677,7 +677,7 @@ export const WorkersManager: React.FC<WorkersManagerProps> = ({
               assignedDeviceIds: devices.map((d) => d.id),
               hasFingerprint: true,
               hasFace: false,
-              joinDate: new Date().toISOString().slice(0, 10),
+              joinDate: getLocalDateStr(),
               isNameSyncedToDevice: false,
             };
             onAddWorker(newW);

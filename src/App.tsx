@@ -27,6 +27,11 @@ import { Device, Worker, AttendanceRecord, ShiftRule, GatePass, FactorySettings,
 import { pingDeviceNetwork, pullDeviceAttendanceLogs, isDesktopApp } from './services/deviceConnection';
 import { resolveSmartPunchState, processSmartAttendanceLogs } from './utils/attendanceEngine';
 
+const getLocalToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('summary');
 
@@ -71,7 +76,15 @@ export default function App() {
     return INITIAL_SHIFT_RULES;
   });
 
-  const [gatePasses, setGatePasses] = useState<GatePass[]>(INITIAL_GATE_PASSES);
+  const [gatePasses, setGatePasses] = useState<GatePass[]>(() => {
+    try {
+      const saved = localStorage.getItem('zkt_gate_passes_v1');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error('Error loading gate passes from localStorage', e);
+    }
+    return INITIAL_GATE_PASSES;
+  });
   
   const [settings, setSettings] = useState<FactorySettings>(() => {
     try {
@@ -160,6 +173,17 @@ export default function App() {
     }, 400);
     return () => clearTimeout(timer);
   }, [shifts]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('zkt_gate_passes_v1', JSON.stringify(gatePasses));
+      } catch (e) {
+        console.error('Error saving gate passes', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [gatePasses]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -257,7 +281,7 @@ export default function App() {
     { 
       id: 'init-1', 
       time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }), 
-      text: 'بدء تشغيل نظام الماكينات والحضور V 5.8.0', 
+      text: 'بدء تشغيل نظام الماكينات والحضور V 5.9.0', 
       type: 'info' 
     }
   ]);
@@ -369,7 +393,9 @@ export default function App() {
   // Task 1: Pre-process attendance logs once with useMemo for ultra-fast navigation
   const processedAttendanceRecords = useMemo(() => {
     return processSmartAttendanceLogs(attendanceRecords, {
+      shiftStartTime: settings?.standardShiftStart || '08:00',
       shiftEndTime: settings?.standardShiftEnd || '16:30',
+      bangladeshiShiftStart: settings?.bangladeshiShiftStart || '08:00',
       bangladeshiShiftEnd: settings?.bangladeshiShiftEnd || '18:30',
       earlyDepartureWindowMinutes: settings?.earlyDepartureWindowMinutes ?? 30,
       duplicateWindowMinutes: settings?.duplicateWindowMinutes ?? 60,
@@ -447,7 +473,13 @@ export default function App() {
           }
 
           const dateObj = new Date(r.recordTime);
-          const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+          const buildLocalDateStr = (d: Date) => {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+          };
+          const dateStr = !isNaN(dateObj.getTime()) ? buildLocalDateStr(dateObj) : buildLocalDateStr(new Date());
           const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
 
           // FIX (Point 2 - Problem 2): r.state is direction (0: IN, 1: OUT). Evaluate through resolveSmartPunchState.
@@ -589,7 +621,13 @@ export default function App() {
         }
 
         const dateObj = new Date(r.recordTime);
-        const dateStr = !isNaN(dateObj.getTime()) ? dateObj.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const buildLocalDateStr = (d: Date) => {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${y}-${m}-${day}`;
+        };
+        const dateStr = !isNaN(dateObj.getTime()) ? buildLocalDateStr(dateObj) : buildLocalDateStr(new Date());
         const timeStr = !isNaN(dateObj.getTime()) ? dateObj.toTimeString().slice(0, 5) : '08:00';
 
         // FIX: In ZKTeco protocol, r.state is attendance state (0: Check-In, 1: Check-Out)
@@ -705,6 +743,20 @@ export default function App() {
   const handleDeleteWorker = (workerCode: number) => {
     setWorkers((prev) => prev.filter((w) => w.code !== workerCode));
     setAttendanceRecords((prev) => prev.filter((r) => r.workerCode !== workerCode));
+    setGatePasses((prev) => prev.filter((p) => Number(p.workerCode) !== workerCode));
+    setLeaves((prev) => prev.filter((l) => Number(l.workerCode) !== workerCode));
+    setAbsenceOverrides((prev) => {
+      const filtered = { ...prev };
+      Object.keys(filtered).forEach((k) => {
+        if (k.endsWith(`_${workerCode}`) || k === String(workerCode)) delete filtered[k];
+      });
+      try {
+        localStorage.setItem('zkt_absence_overrides', JSON.stringify(filtered));
+      } catch (e) {
+        console.error('Error saving absence overrides after worker deletion', e);
+      }
+      return filtered;
+    });
     showNotification(`🗑️ تم مسح بيانات وسجلات العامل (كود #${workerCode}) محلياً من البرنامج بنجاح.`);
   };
 
@@ -820,7 +872,7 @@ export default function App() {
         const worker = workers.find((w) => w.code === code);
         const name = worker ? worker.name : `عامل كود ${code}`;
         const dept = worker ? worker.department : 'عام';
-        const datePart = parts[1] || new Date().toISOString().slice(0, 10);
+        const datePart = parts[1] || getLocalToday();
         const timePart = parts[2] || '08:00:00';
 
         newLogs.push({
@@ -901,7 +953,7 @@ export default function App() {
   const handleExportAllData = () => {
     const backupPayload = {
       timestamp: new Date().toISOString(),
-      version: '5.8.0',
+      version: '5.9.0',
       developer: 'Muhammad Abdullah',
       factorySettings: settings,
       devices,
@@ -918,7 +970,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `نسخة_احتياطية_المصنع_${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `نسخة_احتياطية_المصنع_${getLocalToday()}.json`;
     link.click();
     URL.revokeObjectURL(url);
     showNotification('تم تنزيل النسخة الاحتياطية بنجاح.');
@@ -965,6 +1017,7 @@ export default function App() {
       localStorage.removeItem('zkt_absence_overrides');
       localStorage.removeItem('zkt_leaves_v1');
       localStorage.removeItem('zkt_official_holidays_v1');
+      localStorage.removeItem('zkt_gate_passes_v1');
     } catch {
       // ignore
     }

@@ -2,6 +2,13 @@ import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { AttendanceRecord, ShiftRule, Worker } from '../types';
 
+export function getLocalDateStr(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 /**
  * Smart logic to resolve whether a punch is IN or OUT, fixing old ZKTeco hardware button glitches.
  * If someone punches at 07:45 AM, it is guaranteed to be a CHECK-IN regardless of machine button state.
@@ -113,11 +120,7 @@ export function processSmartAttendanceLogs(
   const now = options?.now || new Date();
   const nowTotalMinutes = now.getHours() * 60 + now.getMinutes();
 
-  // Local YYYY-MM-DD
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  const todayStr = `${y}-${m}-${d}`;
+  const todayStr = getLocalDateStr(now);
 
   const defaultShiftEndStr = options?.shiftEndTime || '16:30';
   const bangladeshiShiftEndStr = options?.bangladeshiShiftEnd || '18:30';
@@ -171,7 +174,7 @@ export function processSmartAttendanceLogs(
       if (hours < overnightCutoff) {
         const curDate = new Date(`${rec.displayDate}T12:00:00`);
         curDate.setDate(curDate.getDate() - 1);
-        targetWorkDay = curDate.toISOString().slice(0, 10);
+        targetWorkDay = getLocalDateStr(curDate);
       }
 
       rec.workDate = targetWorkDay;
@@ -247,11 +250,6 @@ export function processSmartAttendanceLogs(
 
       // Helper for Overtime on departure punches (Standard factory logic for all days, including after-midnight)
       const evaluateOvertime = (punch: AttendanceRecord, punchMinutes: number) => {
-        if (punch.linkedPermissionId) {
-          punch.isOvertime = false;
-          punch.overtimeHours = 0;
-          return;
-        }
         if (punch.isHROverride && punch.overtimeHours !== undefined) {
           punch.isOvertime = punch.overtimeHours > 0;
           return;
@@ -360,6 +358,14 @@ export function processSmartAttendanceLogs(
             p.missedPunchReason = undefined;
           }
           p.isEarlyDeparture = false;
+          const shiftStartStr = isBengali
+            ? (options?.bangladeshiShiftStart || '08:00')
+            : (options?.shiftStartTime || '08:00');
+          const [ssH, ssM] = shiftStartStr.split(':').map((v) => parseInt(v, 10) || 0);
+          const shiftStartMin = ssH * 60 + ssM;
+          const graceMin = (workerShift?.generalGraceMinutes ?? 15) + (workerObj?.customGraceMinutes || 0);
+          const lateCalc = Math.max(0, pMinutes - (shiftStartMin + graceMin));
+          p.lateMinutes = lateCalc > 0 ? lateCalc : 0;
         }
         // Rule 4: Ambiguous Window (12:00 to 15:59 -> 720 to 959 minutes) (Bug 2 Fix: Options)
         else if (pMinutes >= 720 && pMinutes < 960) {
@@ -437,6 +443,14 @@ export function processSmartAttendanceLogs(
             first.missingInPunch = false;
             first.isAmbiguousSinglePunch = false;
             first.isMissedPunch = false;
+            const shiftStartStr = isBengali
+              ? (options?.bangladeshiShiftStart || '08:00')
+              : (options?.shiftStartTime || '08:00');
+            const [ssH, ssM] = shiftStartStr.split(':').map((v) => parseInt(v, 10) || 0);
+            const shiftStartMin = ssH * 60 + ssM;
+            const graceMin = (workerShift?.generalGraceMinutes ?? 15) + (workerObj?.customGraceMinutes || 0);
+            const lateCalc = Math.max(0, fMinutes - (shiftStartMin + graceMin));
+            first.lateMinutes = lateCalc > 0 ? lateCalc : 0;
           } else if (fMinutes >= 720 && fMinutes < 960) {
             // First punch falls in ambiguous window (Bug 2 & 3: Respect HR decision)
             if (first.ambiguousResolution === 'late_in') {
@@ -644,7 +658,9 @@ export function calculateDailyPerformance(
   const graceThresholdDecimal = shiftStartDecimal + totalGraceMinutes / 60;
 
   let lateMinutes = 0;
-  if (inHours > graceThresholdDecimal) {
+  if (checkIn.isHROverride && typeof checkIn.lateMinutes === 'number') {
+    lateMinutes = checkIn.lateMinutes;
+  } else if (inHours > graceThresholdDecimal) {
     lateMinutes = Math.round((inHours - shiftStartDecimal) * 60);
   }
 
@@ -679,8 +695,10 @@ export function calculateDailyPerformance(
 
     workHours = Math.min(netHours, standardShiftHours);
 
-    // Factory Departure Grace Logic: overtime counted past grace window
-    if (minutesPastShiftEnd > departureGraceMinutes) {
+    // Factory Departure Grace Logic: overtime counted past grace window (respect HR override if provided)
+    if (checkOut.isHROverride && typeof checkOut.overtimeHours === 'number') {
+      overtimeHours = checkOut.overtimeHours;
+    } else if (minutesPastShiftEnd > departureGraceMinutes) {
       const otHours = minutesPastShiftEnd / 60;
       overtimeHours = Number(otHours.toFixed(2));
     } else {

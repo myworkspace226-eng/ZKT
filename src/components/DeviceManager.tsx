@@ -27,6 +27,7 @@ import {
   Filter
 } from 'lucide-react';
 import { Device, Worker } from '../types';
+import { getLocalDateStr } from '../utils/attendanceEngine';
 import { 
   pingDeviceNetwork, 
   disconnectDevice,
@@ -119,7 +120,7 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
 
   // Task 3: Date Range Filter for pulling device attendance logs
   const [pullPreset, setPullPreset] = useState<PullDatePreset>('today');
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = getLocalDateStr();
   const [customPullStart, setCustomPullStart] = useState<string>(todayISO);
   const [customPullEnd, setCustomPullEnd] = useState<string>(todayISO);
 
@@ -471,7 +472,7 @@ const DeviceManagerComponent: React.FC<DeviceManagerProps> = ({
             aliasCodes: existing?.aliasCodes || [],
             hasFingerprint: true,
             hasFace: existing ? existing.hasFace : false,
-            joinDate: existing?.joinDate || new Date().toISOString().slice(0, 10),
+            joinDate: existing?.joinDate || getLocalDateStr(),
             isNameSyncedToDevice: Boolean(realName && !realName.startsWith('عامل #') && !realName.startsWith('عامل (')),
             enrolledOnDeviceName: device.name,
           };

@@ -101,7 +101,7 @@ export const Header: React.FC<HeaderProps> = ({
               <span>نظام إدارة البصمة</span>
             </div>
             <div className="text-[10px] text-slate-400">
-              المطور: <span className="text-cyan-300 font-medium">Muhammad Abdullah</span> • <span className="text-cyan-400 font-mono font-medium">V 5.8.0</span>
+              المطور: <span className="text-cyan-300 font-medium">Muhammad Abdullah</span> • <span className="text-cyan-400 font-mono font-medium">V 5.9.0</span>
             </div>
           </div>
         </div>

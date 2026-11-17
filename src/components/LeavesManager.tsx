@@ -16,6 +16,7 @@ import {
   FileText
 } from 'lucide-react';
 import { LeaveRecord, OfficialHoliday, Worker } from '../types';
+import { getLocalDateStr } from '../utils/attendanceEngine';
 import { CustomDatePicker } from './CustomDatePicker';
 
 interface LeavesManagerProps {
@@ -66,7 +67,7 @@ export const LeavesManager: React.FC<LeavesManagerProps> = ({
   onAddOfficialHoliday,
   onDeleteOfficialHoliday,
 }) => {
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayStr = useMemo(() => getLocalDateStr(), []);
 
   // Filter and search states
   const [searchQuery, setSearchQuery] = useState<string>('');

@@ -19,6 +19,11 @@ import { GatePass, Worker } from '../types';
 import { exportToExcel } from '../utils/attendanceEngine';
 import { CustomDatePicker } from './CustomDatePicker';
 
+const getLocalToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 interface GatePassManagerProps {
   gatePasses: GatePass[];
   workers: Worker[];
@@ -40,7 +45,7 @@ export const GatePassManager: React.FC<GatePassManagerProps> = ({
   prefillData,
   onClearPrefill,
 }) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getLocalToday();
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [selectedWorkerCode, setSelectedWorkerCode] = useState<number>(workers.length > 0 ? workers[0].code : 0);
   const [passDate, setPassDate] = useState<string>(todayStr);
