@@ -245,8 +245,8 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
 
     // Re-sort descending (newest records first) using fast string comparison
     enriched.sort((a, b) => {
-      const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
-      const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+      const keyA = `${a.displayDate}T${a.displayTime}:00`;
+      const keyB = `${b.displayDate}T${b.displayTime}:00`;
       return keyB.localeCompare(keyA);
     });
 
@@ -334,7 +334,7 @@ export const AttendanceLogs: React.FC<AttendanceLogsProps> = ({
     filteredRecords.forEach((rec) => {
       const workDay = rec.workDate || rec.displayDate;
       const key = `${rec.workerCode}_${workDay}`;
-      const recPunchTime = rec.timestamp || `${rec.displayDate}T${rec.displayTime}:00`;
+      const recPunchTime = `${rec.displayDate}T${rec.displayTime}:00`;
       let row = map.get(key);
       if (!row) {
         row = {

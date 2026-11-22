@@ -9,6 +9,13 @@ export function getLocalDateStr(date: Date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
+function parseHM(timeStr: string | undefined, fallbackH: number, fallbackM: number): number {
+const [hStr, mStr] = (timeStr || '').split(':');
+const h = parseInt(hStr, 10);
+const m = parseInt(mStr, 10);
+return (Number.isNaN(h) ? fallbackH : h) * 60 + (Number.isNaN(m) ? fallbackM : m);
+}
+
 /**
  * Smart logic to resolve whether a punch is IN or OUT, fixing old ZKTeco hardware button glitches.
  * If someone punches at 07:45 AM, it is guaranteed to be a CHECK-IN regardless of machine button state.
@@ -157,8 +164,8 @@ export function processSmartAttendanceLogs(
 
     // 1. Sort all punches for this worker chronologically (Fast string comparison)
     workerRecords.sort((a, b) => {
-      const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
-      const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+      const keyA = `${a.displayDate}T${a.displayTime}:00`;
+      const keyB = `${b.displayDate}T${b.displayTime}:00`;
       return keyA.localeCompare(keyB);
     });
 
@@ -190,8 +197,8 @@ export function processSmartAttendanceLogs(
     // 3. Process each work day independently
     dayPunchesMap.forEach((punchesOnDay, workDay) => {
       punchesOnDay.sort((a, b) => {
-        const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
-        const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+        const keyA = `${a.displayDate}T${a.displayTime}:00`;
+        const keyB = `${b.displayDate}T${b.displayTime}:00`;
         return keyA.localeCompare(keyB);
       });
 
@@ -321,11 +328,7 @@ export function processSmartAttendanceLogs(
 
       if (acceptedPunches.length === 1) {
         const p = acceptedPunches[0];
-        const [pHStr, pMStr] = (p.displayTime || '08:00').split(':');
-        const pH = parseInt(pHStr, 10) || 8;
-        const pM = parseInt(pMStr, 10) || 0;
-        const pMinutes = pH * 60 + pM;
-
+const pMinutes = parseHM(p.displayTime, 8, 0);
         if (p.isHROverride) {
           p.isAmbiguousSinglePunch = false;
           if (p.resolvedState === 'IN') {
@@ -433,9 +436,7 @@ export function processSmartAttendanceLogs(
       } else {
         // 2 or more accepted punches on this work day
         const first = acceptedPunches[0];
-        const [fHStr, fMStr] = (first.displayTime || '08:00').split(':');
-        const fMinutes = (parseInt(fHStr, 10) || 8) * 60 + (parseInt(fMStr, 10) || 0);
-
+        const fMinutes = parseHM(first.displayTime, 8, 0);
         // Check if first punch was morning check-in (Rule 1)
         if (!first.isHROverride) {
           if (fMinutes >= 360 && fMinutes < 720) {
@@ -486,9 +487,7 @@ export function processSmartAttendanceLogs(
         processedAll.push(first);
 
         const last = acceptedPunches[acceptedPunches.length - 1];
-        const [lHStr, lMStr] = (last.displayTime || '16:30').split(':');
-        const lMinutes = (parseInt(lHStr, 10) || 16) * 60 + (parseInt(lMStr, 10) || 30);
-
+        const lMinutes = parseHM(last.displayTime, 16, 30);
         // Bug 3 Fix: If second (or last) punch falls in ambiguous window (12:00 - 15:59),
         // FORBIDDEN to automatically consider it OUT! It MUST prompt HR.
         if (!last.isHROverride) {
@@ -553,9 +552,7 @@ export function processSmartAttendanceLogs(
         // Intermediate punches (Punches between first and last)
         for (let i = 1; i < acceptedPunches.length - 1; i++) {
           const mid = acceptedPunches[i];
-          const [mHStr, mMStr] = (mid.displayTime || '12:00').split(':');
-          const mMinutes = (parseInt(mHStr, 10) || 12) * 60 + (parseInt(mMStr, 10) || 0);
-
+          const mMinutes = parseHM(mid.displayTime, 12, 0);
           // If intermediate punch was a temporary pass or return from pass (Point 4)
           if (mid.isHROverride) {
             mid.isDuplicateIgnored = false;
@@ -607,8 +604,8 @@ export function processSmartAttendanceLogs(
 
   // Sort overall descending by date/time (Fast string comparison)
   processedAll.sort((a, b) => {
-    const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
-    const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+    const keyA = `${a.displayDate}T${a.displayTime}:00`;
+    const keyB = `${b.displayDate}T${b.displayTime}:00`;
     return keyB.localeCompare(keyA);
   });
 

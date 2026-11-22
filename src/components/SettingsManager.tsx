@@ -36,6 +36,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [notification, setNotification] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [pendingBackupContent, setPendingBackupContent] = useState<string | null>(null);
+  const [resetConfirmText, setResetConfirmText] = useState<string>('');
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -321,7 +322,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowResetConfirm(true)}
+                onClick={() => { setShowResetConfirm(true); setResetConfirmText(''); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -362,9 +363,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               <AlertTriangle className="w-5 h-5" />
               <h3 className="text-sm font-bold text-white">تأكيد استعادة الضبط الافتراضي</h3>
             </div>
-            <p className="text-xs text-slate-300">
-              هل أنت متأكد من رغبتك في استعادة الإعدادات الافتراضية للنظام؟
+            <p className="text-xs text-slate-300 leading-relaxed">
+            تحذير: هذا الزر لا يعيد الإعدادات فقط — بل يمسح نهائياً كل بيانات المصنع: العمال، حركات البصمة، التصاريح، الإجازات، والعطلات، ويرجع البرنامج فاضياً. لا يمكن التراجع. صدّر نسخة احتياطية (JSON) أولاً من الأزرار المجاورة.
             </p>
+            <div className="pt-1 space-y-1">
+            <label className="block text-[11px] text-slate-300">للتأكيد، اكتب كلمة "مسح":</label>
+            <input type="text" value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} placeholder="اكتب مسح لتفعيل زر التأكيد" className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white text-xs font-mono text-center focus:border-rose-500" />
+            </div>
             <div className="pt-2 flex items-center justify-end gap-2">
               <button
                 onClick={() => setShowResetConfirm(false)}
@@ -373,15 +378,16 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 إلغاء
               </button>
               <button
-                onClick={() => {
-                  onResetFactoryData();
-                  setShowResetConfirm(false);
-                  setNotification('تمت استعادة الإعدادات الافتراضية بنجاح.');
-                  setTimeout(() => setNotification(null), 4000);
-                }}
-                className="px-3 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium cursor-pointer"
-              >
-                تأكيد الاستعادة
+              onClick={() => {
+              onResetFactoryData();
+              setShowResetConfirm(false);
+              setResetConfirmText('');
+              setNotification('تمت إعادة ضبط بيانات المصنع إلى الوضع الافتراضي.');
+              setTimeout(() => setNotification(null), 4000);
+              }}
+              disabled={resetConfirmText.trim() !== 'مسح'}
+              className="px-3 py-1.5 rounded bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-xs font-medium cursor-pointer">
+              نعم، امسح كل بيانات المصنع
               </button>
             </div>
           </div>

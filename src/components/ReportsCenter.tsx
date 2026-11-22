@@ -487,8 +487,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
 
       const rawDayPunches = punchesByDate.get(dateStr) || [];
       const dayPunches = rawDayPunches.slice().sort((a, b) => {
-        const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
-        const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+        const keyA = `${a.displayDate}T${a.displayTime}:00`;
+        const keyB = `${b.displayDate}T${b.displayTime}:00`;
         return keyA.localeCompare(keyB);
       });
 
@@ -800,8 +800,8 @@ export const ReportsCenter: React.FC<ReportsCenterProps> = ({
           const dayName = ARABIC_WEEKDAYS[dow] || '';
 
           const punches = rawPunches.slice().sort((a, b) => {
-            const keyA = a.timestamp || `${a.displayDate}T${a.displayTime}:00`;
-            const keyB = b.timestamp || `${b.displayDate}T${b.displayTime}:00`;
+            const keyA = `${a.displayDate}T${a.displayTime}:00`;
+            const keyB = `${b.displayDate}T${b.displayTime}:00`;
             return keyA.localeCompare(keyB);
           });
 
