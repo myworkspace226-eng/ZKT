@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Settings, 
   Building2, 
@@ -37,6 +37,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const [pendingBackupContent, setPendingBackupContent] = useState<string | null>(null);
   const [resetConfirmText, setResetConfirmText] = useState<string>('');
+  useEffect(() => {
+setFormData({ ...settings });
+}, [settings]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();

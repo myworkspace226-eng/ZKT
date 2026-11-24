@@ -964,6 +964,7 @@ export default function App() {
       officialHolidays,
       attendanceRecords,
       absenceOverrides,
+      auditLog,
     };
 
     const blob = new Blob([JSON.stringify(backupPayload, null, 2)], { type: 'application/json' });
@@ -997,6 +998,7 @@ export default function App() {
         setAbsenceOverrides(data.absenceOverrides);
         localStorage.setItem('zkt_absence_overrides', JSON.stringify(data.absenceOverrides));
       }
+      if (data.auditLog) setAuditLog(data.auditLog);
       showNotification('تمت استعادة النسخة الاحتياطية وتحديث بيانات المصنع بنجاح!');
     } catch {
       showNotification('خطأ في قراءة ملف النسخة الاحتياطية. يرجى التأكد من صحة الملف.');
