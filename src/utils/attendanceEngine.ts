@@ -348,7 +348,13 @@ const pMinutes = parseHM(p.displayTime, 8, 0);
         }
 
         // Rule 1: Morning Check-in Window (06:00 to 11:59 -> 360 to 719 minutes)
-        if (pMinutes >= 360 && pMinutes < 720) {
+        if (pMinutes >= 360 && pMinutes < 720 && p.resolvedState === 'OUT' && !p.isManual) {
+        p.isAmbiguousSinglePunch = true;
+        p.ambiguousResolution = 'pending';
+        p.isMissedPunch = true;
+        p.missedPunchType = 'AMBIGUOUS';
+        p.missedPunchReason = 'بصمة انصراف في نافذة الصباح (06:00-11:59) - تتطلب قرار HR';
+        } else if (pMinutes >= 360 && pMinutes < 720) {
           p.resolvedState = 'IN';
           p.isAmbiguousSinglePunch = false;
           p.missingInPunch = false;
@@ -439,7 +445,13 @@ const pMinutes = parseHM(p.displayTime, 8, 0);
         const fMinutes = parseHM(first.displayTime, 8, 0);
         // Check if first punch was morning check-in (Rule 1)
         if (!first.isHROverride) {
-          if (fMinutes >= 360 && fMinutes < 720) {
+          if (fMinutes >= 360 && fMinutes < 720 && first.resolvedState === 'OUT' && !first.isManual) {
+          first.isAmbiguousSinglePunch = true;
+          first.ambiguousResolution = 'pending';
+          first.isMissedPunch = true;
+          first.missedPunchType = 'AMBIGUOUS';
+          first.missedPunchReason = 'بصمة انصراف في نافذة الصباح (06:00-11:59) - تتطلب قرار HR';
+          } else if (fMinutes >= 360 && fMinutes < 720) {
             first.resolvedState = 'IN';
             first.missingInPunch = false;
             first.isAmbiguousSinglePunch = false;
