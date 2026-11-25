@@ -44,9 +44,9 @@ export function resolveSmartPunchState(
   if (decimalHour >= 6.0 && decimalHour < 12.0) {
     if (rawState === 'OUT') {
       return {
-        resolvedState: 'IN',
-        autoCorrected: true,
-        reason: 'تم التصحيح تلقائياً: البصمة في نافذة الحضور الصباحية (06:00 - 11:59)',
+        resolvedState: 'OUT',
+        autoCorrected: false,
+        reason: 'بصمة انصراف خام في نافذة الصباح (06:00 - 11:59) - تتطلب قرار HR (انصراف مبكر/تصريح أم خطأ زر)',
       };
     }
     return { resolvedState: 'IN', autoCorrected: false, reason: 'حضور طبيعي (نافذة الصباح)' };
@@ -535,11 +535,17 @@ const pMinutes = parseHM(p.displayTime, 8, 0);
             evaluateEarlyDeparture(last, lMinutes);
             evaluateOvertime(last, lMinutes);
           } else {
-            // Rule 3: Second punch in morning (< 12:00) with cooldown satisfied is early OUT
-            last.resolvedState = 'OUT';
-            last.isAmbiguousSinglePunch = false;
-            last.isMissedPunch = false;
-            evaluateEarlyDeparture(last, lMinutes);
+          // B33 Fix: بصمة ثانية في نافذة الصباح (06:00-11:59) = حالة غامضة.
+          // ممنوع اعتبارها انصراف مبكر تلقائياً: قد تكون تكرار، أو انصراف مبكر فعلاً، أو تصحيح حضور.
+          // نرفع علم قرار HR بنفس آلية نافذة الغموض الظهرية الموجودة.
+          last.isAmbiguousSinglePunch = true;
+          last.ambiguousResolution = 'pending';
+          last.isMissedPunch = true;
+          last.missedPunchType = 'AMBIGUOUS';
+          last.missedPunchReason = 'بصمة ثانية في نافذة الصباح (06:00-11:59) - تتطلب قرار HR';
+          last.isEarlyDeparture = false;
+          last.earlyDepartureMinutes = 0;
+          last.earlyDepartureReason = undefined;
           }
         } else if (last.resolvedState === 'OUT') {
           evaluateEarlyDeparture(last, lMinutes);
